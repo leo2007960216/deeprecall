@@ -218,7 +218,7 @@ All stores implement the same interface: `add_documents()`, `search()`, `delete(
 
 ## Framework Adapters
 
-**LangChain** / **LlamaIndex** / **OpenAI-compatible API** -- see [docs/adapters.md](docs/adapters.md).
+**LangChain** / **LlamaIndex** / **OpenAI-compatible API** -- see [adapters docs](https://github.com/kothapavan1998/deeprecall/blob/main/docs/adapters.md).
 
 ```bash
 deeprecall serve --vectorstore chroma --collection my_docs --port 8000
@@ -267,7 +267,7 @@ pip install -e ".[all]"
 make check
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](https://github.com/kothapavan1998/deeprecall/blob/main/CONTRIBUTING.md).
 
 ## Citation
 
