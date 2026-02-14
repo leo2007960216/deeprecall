@@ -1,0 +1,89 @@
+[project]
+name = "deeprecall"
+authors = [
+    {name = "Pavan Kothapalli"},
+]
+version = "0.1.0"
+description = "Recursive reasoning engine for AI agents and vector databases, powered by RLM."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["rlm", "rag", "recursive", "vector-database", "langchain", "llamaindex", "ai-agents"]
+
+dependencies = [
+    "rlms>=0.1.0",
+    "openai>=2.14.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.2.1",
+    "click>=8.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/kothapavan/deeprecall"
+Repository = "https://github.com/kothapavan/deeprecall"
+Issues = "https://github.com/kothapavan/deeprecall/issues"
+
+[project.optional-dependencies]
+milvus = ["pymilvus>=2.5.0"]
+chroma = ["chromadb>=1.0.0"]
+qdrant = ["qdrant-client>=1.12.0"]
+pinecone = ["pinecone>=5.0.0"]
+langchain = ["langchain-core>=0.3.0"]
+llamaindex = ["llama-index-core>=0.12.0"]
+server = ["fastapi>=0.115.0", "uvicorn>=0.34.0"]
+all = [
+    "deeprecall[milvus,chroma,qdrant,pinecone,langchain,llamaindex,server]",
+]
+
+[project.scripts]
+deeprecall = "deeprecall.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["deeprecall", "deeprecall.*"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.0",
+    "ruff>=0.8.0",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "UP",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
