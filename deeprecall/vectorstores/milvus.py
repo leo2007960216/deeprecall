@@ -154,7 +154,7 @@ class MilvusStore(BaseVectorStore):
                     filter_parts.append(f'metadata["{safe_key}"] == "{safe_val}"')
                 elif isinstance(value, bool):
                     filter_parts.append(f'metadata["{safe_key}"] == {"true" if value else "false"}')
-                elif isinstance(value, (int, float)):
+                elif isinstance(value, int | float):
                     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
                         raise VectorStoreError(
                             f"Invalid filter value for {key!r}: NaN/Inf not supported"

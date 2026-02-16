@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, cast
 
 try:
     from fastapi import Request
@@ -66,7 +66,8 @@ class APIKeyAuth(BaseHTTPMiddleware):
                 is_valid = await self.validate_fn(api_key)
             else:
                 # Run sync validators in a thread to avoid blocking the loop
-                is_valid = await asyncio.to_thread(self.validate_fn, api_key)
+                sync_fn = cast(Callable[[str], bool], self.validate_fn)
+                is_valid = await asyncio.to_thread(sync_fn, api_key)
         elif self.api_keys:
             is_valid = api_key in self.api_keys
 

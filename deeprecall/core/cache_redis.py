@@ -140,7 +140,7 @@ class RedisCache(BaseCache):
         with self._lock:
             self._hits += 1
         try:
-            return json.loads(raw)
+            return json.loads(raw)  # type: ignore[arg-type]
         except json.JSONDecodeError:
             logger.warning("RedisCache corrupted entry for key %s", key)
             return None
@@ -172,7 +172,9 @@ class RedisCache(BaseCache):
         try:
             cursor = 0
             while True:
-                cursor, keys = self._client.scan(cursor=cursor, match=f"{self.prefix}*", count=500)
+                cursor, keys = self._client.scan(  # type: ignore[misc]
+                    cursor=cursor, match=f"{self.prefix}*", count=500
+                )
                 if keys:
                     self._client.delete(*keys)
                 if cursor == 0:
@@ -190,7 +192,9 @@ class RedisCache(BaseCache):
             count = 0
             cursor = 0
             while True:
-                cursor, keys = self._client.scan(cursor=cursor, match=f"{self.prefix}*", count=500)
+                cursor, keys = self._client.scan(  # type: ignore[misc]
+                    cursor=cursor, match=f"{self.prefix}*", count=500
+                )
                 count += len(keys)
                 if cursor == 0:
                     break
@@ -219,7 +223,7 @@ class RedisCache(BaseCache):
             start = time.perf_counter()
             self._client.ping()
             latency_ms = (time.perf_counter() - start) * 1000
-            info = self._client.info("server")
+            info: dict[str, Any] = self._client.info("server")  # type: ignore[assignment]
             return {
                 "status": "connected",
                 "latency_ms": round(latency_ms, 2),

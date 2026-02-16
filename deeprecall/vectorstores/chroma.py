@@ -141,7 +141,7 @@ class ChromaStore(BaseVectorStore):
                 search_results.append(
                     SearchResult(
                         content=doc,
-                        metadata=meta or {},
+                        metadata=dict(meta) if meta else {},
                         score=score,
                         id=rid,
                     )

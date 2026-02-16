@@ -267,7 +267,7 @@ def _init_tracer(
     else:
         # User already set a provider; add our processor to it
         existing.add_span_processor(BatchSpanProcessor(exporter))
-        provider = existing  # noqa: F841
+        provider = existing  # type: ignore[assignment]  # noqa: F841
 
     return trace.get_tracer(tracer_name)
 
