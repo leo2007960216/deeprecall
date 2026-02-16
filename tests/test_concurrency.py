@@ -422,6 +422,88 @@ class TestCallbackManagerConcurrency:
 
 
 # ---------------------------------------------------------------------------
+# DiskCache thread safety
+# ---------------------------------------------------------------------------
+
+
+class TestDiskCacheConcurrency:
+    """Verify DiskCache (SQLite) operations are safe under concurrent access."""
+
+    def test_concurrent_get_set(self):
+        """Many threads doing get/set should not corrupt the SQLite database."""
+        import tempfile
+
+        from deeprecall.core.cache import DiskCache
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            cache = DiskCache(db_path=f.name, default_ttl=60)
+
+        num_threads = 50
+
+        def do_ops(i: int):
+            cache.set(f"key-{i}", f"value-{i}")
+            val = cache.get(f"key-{i}")
+            if val is not None:
+                assert val == f"value-{i}"
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(do_ops, i) for i in range(num_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        stats = cache.stats()
+        assert stats["size"] <= num_threads
+        assert stats["hits"] + stats["misses"] == num_threads
+
+    def test_concurrent_write_and_clear(self):
+        """clear() running while get/set are active should not deadlock or corrupt."""
+        import tempfile
+
+        from deeprecall.core.cache import DiskCache
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            cache = DiskCache(db_path=f.name, default_ttl=60)
+
+        stop = threading.Event()
+
+        def writer():
+            i = 0
+            while not stop.is_set():
+                cache.set(f"key-{i}", f"val-{i}")
+                i += 1
+
+        def reader():
+            i = 0
+            while not stop.is_set():
+                cache.get(f"key-{i}")
+                i += 1
+
+        def clearer():
+            while not stop.is_set():
+                cache.clear()
+                time.sleep(0.01)
+
+        threads = []
+        for _ in range(2):
+            threads.append(threading.Thread(target=writer))
+            threads.append(threading.Thread(target=reader))
+        threads.append(threading.Thread(target=clearer))
+
+        for t in threads:
+            t.start()
+
+        time.sleep(0.3)
+        stop.set()
+
+        for t in threads:
+            t.join(timeout=5)
+
+        # If we get here without deadlock or crash, the test passes
+        stats = cache.stats()
+        assert isinstance(stats["size"], int)
+
+
+# ---------------------------------------------------------------------------
 # InMemoryCache thread safety (pre-existing, verify it holds)
 # ---------------------------------------------------------------------------
 

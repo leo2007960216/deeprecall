@@ -29,6 +29,9 @@ class DeepRecallTracer:
         start_time: The time.perf_counter() value when the query started.
     """
 
+    _search_pattern = re.compile(r"search_db\s*\(")
+    _search_query_pattern = re.compile(r'search_db\s*\(\s*["\']([^"\']+)["\']')
+
     def __init__(
         self,
         budget: QueryBudget | None = None,
@@ -39,7 +42,6 @@ class DeepRecallTracer:
         self.budget_status = BudgetStatus(budget=budget or QueryBudget())
         self.callback_manager = callback_manager
         self.start_time = start_time or time.perf_counter()
-        self._search_pattern = re.compile(r"search_db\s*\(")
 
     def log(self, iteration: Any) -> None:
         """Called by RLM after each reasoning iteration.
@@ -109,9 +111,7 @@ class DeepRecallTracer:
     def _extract_search_calls(self, code: str, stdout: str | None) -> list[dict[str, Any]]:
         """Parse search_db() calls from code to track queries."""
         calls: list[dict[str, Any]] = []
-        # Find all search_db("...") patterns in the code
-        pattern = re.compile(r'search_db\s*\(\s*["\']([^"\']+)["\']')
-        for match in pattern.finditer(code):
+        for match in self._search_query_pattern.finditer(code):
             calls.append(
                 {
                     "query": match.group(1),
@@ -122,10 +122,6 @@ class DeepRecallTracer:
         if not calls and self._search_pattern.search(code):
             calls.append({"query": "<dynamic>", "has_results": True})
         return calls
-
-    def get_total_search_calls(self) -> int:
-        """Return total search calls across all iterations."""
-        return self.budget_status.search_calls_used
 
     def get_trace(self) -> list[ReasoningStep]:
         """Return the collected reasoning trace."""

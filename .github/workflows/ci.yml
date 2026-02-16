@@ -21,6 +21,32 @@ jobs:
       - name: Format check
         run: ruff format --check .
 
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pre-commit
+        run: pip install pre-commit
+      - name: Run pre-commit
+        run: pre-commit run --all-files
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -e ".[all]"
+          pip install mypy
+      - name: Type check
+        run: mypy deeprecall --ignore-missing-imports
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -34,6 +60,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e ".[all]"
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov pytest-asyncio pytest-mock
       - name: Run tests
-        run: pytest tests/ -v --cov=deeprecall --ignore=tests/test_integration_redis_otel.py --ignore=tests/test_cre_e2e.py
+        run: >-
+          pytest tests/ -v
+          --cov=deeprecall --cov-report=xml --cov-fail-under=60
+          --ignore=tests/test_e2e.py
+          --ignore=tests/test_integration_redis_otel.py

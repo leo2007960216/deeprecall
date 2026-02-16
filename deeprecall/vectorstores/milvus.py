@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any
 
+from deeprecall.core.exceptions import VectorStoreConnectionError, VectorStoreError
 from deeprecall.core.types import SearchResult
 from deeprecall.vectorstores.base import BaseVectorStore
 
@@ -62,19 +65,24 @@ class MilvusStore(BaseVectorStore):
                 "Install it with: pip install deeprecall[milvus]"
             ) from None
 
-        self._client = MilvusClient(uri=uri, **kwargs)
-        self._collection_name = collection_name
-        self._dimension = dimension
-        self._metric_type = metric_type
+        try:
+            self._client = MilvusClient(uri=uri, **kwargs)
+            self._collection_name = collection_name
+            self._dimension = dimension
+            self._metric_type = metric_type
 
-        # Create collection if it doesn't exist
-        if not self._client.has_collection(collection_name):
-            self._client.create_collection(
-                collection_name=collection_name,
-                dimension=dimension,
-                metric_type=metric_type,
-                auto_id=False,
-            )
+            # Create collection if it doesn't exist
+            if not self._client.has_collection(collection_name):
+                self._client.create_collection(
+                    collection_name=collection_name,
+                    dimension=dimension,
+                    metric_type=metric_type,
+                    auto_id=False,
+                )
+        except ImportError:
+            raise
+        except Exception as e:
+            raise VectorStoreConnectionError(f"Failed to connect to Milvus: {e}") from e
 
     def add_documents(
         self,
@@ -107,7 +115,10 @@ class MilvusStore(BaseVectorStore):
                 record["metadata"] = metadatas[i]
             data.append(record)
 
-        self._client.insert(collection_name=self._collection_name, data=data)
+        try:
+            self._client.insert(collection_name=self._collection_name, data=data)
+        except Exception as e:
+            raise VectorStoreError(f"Milvus insert failed: {e}") from e
         return ids
 
     def search(
@@ -132,23 +143,33 @@ class MilvusStore(BaseVectorStore):
         if filters is not None:
             filter_parts = []
             for key, value in filters.items():
-                # Sanitize key and value to prevent filter expression injection
-                safe_key = str(key).replace('"', '\\"')
+                # Validate key: only alphanumeric and underscores allowed
+                safe_key = str(key)
+                if not re.match(r"^[a-zA-Z0-9_]+$", safe_key):
+                    raise VectorStoreError(
+                        f"Invalid filter key {key!r}: only alphanumeric and underscores allowed"
+                    )
                 if isinstance(value, str):
-                    safe_val = value.replace('"', '\\"')
+                    safe_val = value.replace("\\", "\\\\").replace('"', '\\"')
                     filter_parts.append(f'metadata["{safe_key}"] == "{safe_val}"')
                 elif isinstance(value, bool):
                     filter_parts.append(f'metadata["{safe_key}"] == {"true" if value else "false"}')
                 elif isinstance(value, (int, float)):
+                    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                        raise VectorStoreError(
+                            f"Invalid filter value for {key!r}: NaN/Inf not supported"
+                        )
                     filter_parts.append(f'metadata["{safe_key}"] == {value}')
                 else:
-                    # Convert other types to string
-                    safe_val = str(value).replace('"', '\\"')
+                    safe_val = str(value).replace("\\", "\\\\").replace('"', '\\"')
                     filter_parts.append(f'metadata["{safe_key}"] == "{safe_val}"')
             if filter_parts:
                 search_params["filter"] = " and ".join(filter_parts)
 
-        results = self._client.search(**search_params)
+        try:
+            results = self._client.search(**search_params)
+        except Exception as e:
+            raise VectorStoreError(f"Milvus search failed: {e}") from e
 
         search_results: list[SearchResult] = []
         if results:
@@ -167,12 +188,23 @@ class MilvusStore(BaseVectorStore):
         return search_results
 
     def delete(self, ids: list[str]) -> None:
-        self._client.delete(
-            collection_name=self._collection_name,
-            ids=ids,
-        )
+        try:
+            self._client.delete(
+                collection_name=self._collection_name,
+                ids=ids,
+            )
+        except Exception as e:
+            raise VectorStoreError(f"Milvus delete failed: {e}") from e
 
     def count(self) -> int:
-        stats = self._client.get_collection_stats(self._collection_name)
-        row_count = stats.get("row_count", 0)
-        return int(row_count)  # some versions return string
+        try:
+            stats = self._client.get_collection_stats(self._collection_name)
+            row_count = stats.get("row_count", 0)
+            return int(row_count)  # some versions return string
+        except Exception as e:
+            raise VectorStoreError(f"Milvus count failed: {e}") from e
+
+    def close(self) -> None:
+        """Close the Milvus client connection."""
+        if hasattr(self._client, "close"):
+            self._client.close()

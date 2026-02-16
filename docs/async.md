@@ -44,6 +44,7 @@ Same as `DeepRecall` -- accepts `vectorstore`, `config`, or individual kwargs.
 | Method | Signature | Description |
 |---|---|---|
 | `query()` | `async (query, root_prompt=None, top_k=None, budget=None) -> DeepRecallResult` | Non-blocking query |
+| `query_batch()` | `async (queries, max_concurrency=4, ...) -> list[DeepRecallResult]` | Concurrent batch queries via `asyncio.gather` |
 | `add_documents()` | `async (documents, metadatas=None, ids=None) -> list[str]` | Non-blocking document ingestion |
 | `close()` | `async () -> None` | Clean up resources |
 

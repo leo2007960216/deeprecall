@@ -119,3 +119,46 @@ class DeepRecallResult:
             "error": self.error,
             "confidence": self.confidence,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DeepRecallResult:
+        """Reconstruct a DeepRecallResult from a plain dict (e.g. cache hit)."""
+        sources = [
+            Source(
+                content=s.get("content", ""),
+                metadata=s.get("metadata", {}),
+                score=s.get("score", 0.0),
+                id=s.get("id", ""),
+            )
+            for s in data.get("sources", [])
+        ]
+        trace = [
+            ReasoningStep(
+                iteration=r.get("iteration", 0),
+                action=r.get("action", ""),
+                code=r.get("code"),
+                output=r.get("output"),
+                searches=r.get("searches", []),
+                sub_llm_calls=r.get("sub_llm_calls", 0),
+                iteration_time=r.get("iteration_time"),
+            )
+            for r in data.get("reasoning_trace", [])
+        ]
+        raw_usage = data.get("usage", {})
+        usage = UsageInfo(
+            total_input_tokens=raw_usage.get("total_input_tokens", 0),
+            total_output_tokens=raw_usage.get("total_output_tokens", 0),
+            total_calls=raw_usage.get("total_calls", 0),
+            model_breakdown=raw_usage.get("model_breakdown", {}),
+        )
+        return cls(
+            answer=data.get("answer", ""),
+            sources=sources,
+            reasoning_trace=trace,
+            usage=usage,
+            execution_time=data.get("execution_time", 0.0),
+            query=data.get("query", ""),
+            budget_status=data.get("budget_status"),
+            error=data.get("error"),
+            confidence=data.get("confidence"),
+        )

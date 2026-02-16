@@ -1,0 +1,281 @@
+# DeepRecall — Full API Reference
+
+> Recursive reasoning engine for vector databases. pip install deeprecall
+
+## Install
+
+```bash
+pip install deeprecall[chroma]               # ChromaDB (local, zero-config)
+pip install deeprecall[milvus]               # Milvus
+pip install deeprecall[qdrant]               # Qdrant
+pip install deeprecall[pinecone]             # Pinecone
+pip install deeprecall[faiss]                # FAISS (local, ML-native)
+pip install deeprecall[server]               # FastAPI + uvicorn
+pip install deeprecall[redis]                # Redis distributed cache
+pip install deeprecall[otel]                 # OpenTelemetry tracing
+pip install deeprecall[langchain]            # LangChain adapter
+pip install deeprecall[llamaindex]           # LlamaIndex adapter
+pip install deeprecall[rerank-cohere]        # Cohere reranker
+pip install deeprecall[rerank-cross-encoder] # Cross-encoder reranker
+pip install deeprecall[all]                  # Everything
+```
+
+Requires Python >= 3.11. MIT License.
+
+## Quick Start
+
+```python
+from deeprecall import DeepRecall
+from deeprecall.vectorstores import ChromaStore
+
+store = ChromaStore(collection_name="my_docs")
+store.add_documents(["doc 1 text...", "doc 2 text...", "doc 3 text..."])
+
+with DeepRecall(
+    vectorstore=store,
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini", "api_key": "sk-..."},
+) as engine:
+    result = engine.query("What are the key themes across these documents?")
+    print(result.answer)
+    print(f"Sources: {len(result.sources)}, Steps: {len(result.reasoning_trace)}")
+```
+
+## Core Classes
+
+### DeepRecall / DeepRecallEngine
+
+```python
+from deeprecall import DeepRecall, DeepRecallConfig, QueryBudget
+
+# Option 1: kwargs
+engine = DeepRecall(
+    vectorstore=store,           # BaseVectorStore (required)
+    backend="openai",            # str: "openai", "anthropic", "gemini", ...
+    backend_kwargs={"model_name": "gpt-4o-mini", "api_key": "sk-..."},
+    verbose=False,               # bool: rich console output
+    max_iterations=15,           # int: max reasoning loop steps
+)
+
+# Option 2: config object
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    max_iterations=15,
+    max_depth=1,
+    top_k=5,
+    verbose=False,
+    log_dir=None,                # str | None: auto-creates JSONLCallback
+    budget=QueryBudget(...),     # QueryBudget | None
+    callbacks=[...],             # list[BaseCallback] | None
+    cache=InMemoryCache(...),    # BaseCache | None
+    reranker=CohereReranker(..), # BaseReranker | None
+    retry=RetryConfig(...),      # RetryConfig | None
+    reuse_search_server=True,    # bool: keep server alive across queries
+)
+engine = DeepRecall(vectorstore=store, config=config)
+```
+
+#### Methods
+
+```python
+# Query (returns DeepRecallResult)
+result = engine.query(
+    "question",
+    root_prompt=None,    # str | None
+    top_k=None,          # int | None: override config top_k
+    budget=QueryBudget(  # QueryBudget | None: per-query limits
+        max_search_calls=10,
+        max_tokens=50000,
+        max_time_seconds=30.0,
+    ),
+)
+
+# Batch query (concurrent, returns list[DeepRecallResult])
+results = engine.query_batch(
+    ["q1?", "q2?", "q3?"],
+    max_concurrency=4,   # int: parallel queries
+)
+
+# Add documents
+ids = engine.add_documents(["doc1", "doc2"], metadatas=[{...}], ids=["id1", "id2"])
+
+# Cleanup
+engine.close()
+# or use context manager: with DeepRecall(...) as engine:
+```
+
+### DeepRecallResult
+
+```python
+result.answer              # str
+result.sources             # list[Source] -- .content, .metadata, .score, .id
+result.reasoning_trace     # list[ReasoningStep] -- .iteration, .action, .code, .output, .searches
+result.usage               # UsageInfo -- .total_input_tokens, .total_output_tokens, .total_calls
+result.execution_time      # float (seconds)
+result.query               # str
+result.budget_status       # dict | None
+result.error               # str | None
+result.confidence          # float | None (0-1)
+result.to_dict()           # JSON-serializable dict
+```
+
+### AsyncDeepRecall
+
+```python
+from deeprecall import AsyncDeepRecall
+
+async with AsyncDeepRecall(vectorstore=store, backend="openai",
+                            backend_kwargs={"model_name": "gpt-4o-mini"}) as engine:
+    result = await engine.query("question")
+    results = await engine.query_batch(["q1?", "q2?"], max_concurrency=4)
+    await engine.add_documents(["new doc"])
+```
+
+## Vector Stores
+
+All stores: `add_documents(docs, metadatas?, ids?, embeddings?) -> list[str]`,
+`search(query, top_k=5, filters?) -> list[SearchResult]`,
+`delete(ids)`, `count() -> int`, `close()`.
+All support `with store:` context manager.
+
+```python
+from deeprecall.vectorstores import ChromaStore, MilvusStore, QdrantStore, PineconeStore, FAISSStore
+
+# ChromaDB (no embedding_fn needed)
+store = ChromaStore(collection_name="docs")
+store = ChromaStore(collection_name="docs", persist_directory="./chroma_db")
+
+# Milvus (requires embedding_fn)
+store = MilvusStore(collection_name="docs", uri="http://localhost:19530",
+                     dimension=1536, embedding_fn=my_embed_fn)
+
+# Qdrant (requires embedding_fn)
+store = QdrantStore(collection_name="docs", url="http://localhost:6333",
+                     dimension=1536, distance="Cosine", embedding_fn=my_embed_fn)
+
+# Pinecone (requires embedding_fn + API key)
+store = PineconeStore(index_name="docs", api_key="pc-...",
+                       dimension=1536, embedding_fn=my_embed_fn)
+
+# FAISS (requires embedding_fn, local)
+store = FAISSStore(dimension=384, embedding_fn=my_embed_fn)
+store.save("./index")
+store = FAISSStore.load("./index", embedding_fn=my_embed_fn)
+```
+
+### Custom Embedding Function Signature
+
+```python
+def my_embed_fn(texts: list[str]) -> list[list[float]]:
+    # Returns list of embedding vectors
+    ...
+```
+
+## Caching
+
+```python
+from deeprecall import InMemoryCache, DiskCache
+from deeprecall import RedisCache  # lazy import, needs redis
+
+cache = InMemoryCache(max_size=500, default_ttl=3600)
+cache = DiskCache(db_path="./cache.db")
+cache = RedisCache(url="redis://localhost:6379/0")
+```
+
+## Callbacks
+
+```python
+from deeprecall import ConsoleCallback, JSONLCallback, ProgressCallback
+from deeprecall import OpenTelemetryCallback  # lazy import, needs opentelemetry
+
+config = DeepRecallConfig(callbacks=[
+    ConsoleCallback(),
+    JSONLCallback(log_dir="./logs"),
+    OpenTelemetryCallback(service_name="my-service"),
+])
+```
+
+Hooks: `on_query_start`, `on_reasoning_step`, `on_search`, `on_sub_llm_call`,
+`on_progress`, `on_query_end`, `on_error`, `on_budget_warning`.
+
+## Reranking
+
+```python
+from deeprecall.core import CohereReranker, CrossEncoderReranker
+
+config = DeepRecallConfig(reranker=CohereReranker(api_key="co-..."))
+config = DeepRecallConfig(reranker=CrossEncoderReranker(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"))
+```
+
+## Retry
+
+```python
+from deeprecall import RetryConfig
+
+config = DeepRecallConfig(retry=RetryConfig(max_retries=3, base_delay=1.0, jitter=True))
+```
+
+## Exceptions
+
+```python
+from deeprecall import (
+    DeepRecallError,             # Base
+    ConfigurationError,          # Bad config
+    VectorStoreError,            # Vector DB failure
+    VectorStoreConnectionError,  # Connection failure
+    LLMProviderError,            # LLM call failed
+    LLMTimeoutError,             # LLM timeout
+    LLMRateLimitError,           # Rate limited (.retry_after)
+    CacheError,                  # Cache failure
+    SearchServerError,           # Internal search server failure
+    BudgetExceededError,         # Budget limit hit (.reason, .status)
+)
+```
+
+## Framework Adapters
+
+### LangChain
+
+```python
+from deeprecall.adapters.langchain import DeepRecallRetriever, DeepRecallChatModel
+
+retriever = DeepRecallRetriever(engine=engine, top_k=10)
+docs = retriever.invoke("question")
+
+chat = DeepRecallChatModel(engine=engine)
+response = chat.invoke("question")
+```
+
+### LlamaIndex
+
+```python
+from deeprecall.adapters.llamaindex import DeepRecallQueryEngine, DeepRecallRetriever
+
+qe = DeepRecallQueryEngine(engine=engine)
+response = qe.query("question")
+
+retriever = DeepRecallRetriever(engine=engine, top_k=5)
+nodes = retriever.retrieve("question")
+```
+
+## CLI
+
+```bash
+deeprecall init                                    # Generate config
+deeprecall ingest --path ./docs/ --vectorstore chroma
+deeprecall query "question" --max-searches 10 --max-time 30
+deeprecall serve --port 8000 --api-keys "key1,key2" --rate-limit 60
+deeprecall delete doc_id_1 doc_id_2
+deeprecall status
+deeprecall benchmark --queries queries.json
+```
+
+## OpenAI-Compatible Server
+
+```bash
+deeprecall serve --vectorstore chroma --collection docs --port 8000
+```
+
+Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (streaming supported),
+`POST /v1/documents`, `GET /v1/usage`, `POST /v1/cache/clear`.

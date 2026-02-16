@@ -1,6 +1,6 @@
 # DeepRecall Documentation
 
-**DeepRecall** is a recursive reasoning engine that bridges AI agents with vector databases using MIT's [Recursive Language Models (RLM)](https://github.com/alexzhang13/rlm) paradigm.
+**DeepRecall** is a recursive reasoning engine for vector databases using MIT's [Recursive Language Models (RLM)](https://github.com/alexzhang13/rlm) paradigm.
 
 ## What Makes DeepRecall Different?
 
@@ -22,8 +22,8 @@ Standard RAG (Retrieval-Augmented Generation) performs a single pass: retrieve r
 ### API Reference
 
 - [API Reference](api-reference.md) -- Complete parameter reference for every class and method
-  - `DeepRecall` / `DeepRecallEngine` constructor, `.query()`, `.add_documents()`
-  - `DeepRecallConfig` -- all 16 configuration parameters
+  - `DeepRecall` / `DeepRecallEngine` constructor, `.query()`, `.query_batch()`, `.add_documents()`
+  - `DeepRecallConfig` -- all 18 configuration parameters
   - `QueryBudget` -- resource limits
   - `DeepRecallResult`, `Source`, `ReasoningStep`, `UsageInfo` -- return types
 
@@ -41,14 +41,14 @@ Standard RAG (Retrieval-Augmented Generation) performs a single pass: retrieve r
 
 ### Integrations
 
-- [Vector Stores](vectorstores.md) -- ChromaDB, Milvus, Qdrant, Pinecone
+- [Vector Stores](vectorstores.md) -- ChromaDB, Milvus, Qdrant, Pinecone, FAISS
 - [Framework Adapters](adapters.md) -- LangChain, LlamaIndex, OpenAI-compatible API
 
 ### Deployment
 
 - [OpenAI-Compatible Server](server.md) -- REST API, authentication, rate limiting
 - [Async & Concurrency](async.md) -- AsyncDeepRecall, thread safety, production concurrency
-- [CLI Reference](cli.md) -- `init`, `ingest`, `query`, `serve`, `delete`
+- [CLI Reference](cli.md) -- `init`, `ingest`, `query`, `serve`, `delete`, `status`, `benchmark`
 
 ## Links
 

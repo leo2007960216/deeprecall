@@ -25,7 +25,7 @@ engine = DeepRecall(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `vectorstore` | `BaseVectorStore` | **required** | Any adapter: `ChromaStore`, `MilvusStore`, `QdrantStore`, `PineconeStore` |
+| `vectorstore` | `BaseVectorStore` | **required** | Any adapter: `ChromaStore`, `MilvusStore`, `QdrantStore`, `PineconeStore`, `FAISSStore` |
 | `config` | `DeepRecallConfig \| None` | `None` | Full config object. If provided, all other kwargs are ignored |
 | `backend` | `str` | `"openai"` | LLM backend (see [Backends](backends.md)) |
 | `backend_kwargs` | `dict` | `{"model_name": "gpt-4o-mini"}` | Backend-specific settings |
@@ -128,6 +128,33 @@ config = DeepRecallConfig(
 | `cache` | `BaseCache \| None` | `None` | Cache backend (see [Caching](caching.md)) |
 | `cache_ttl` | `int` | `3600` | Time-to-live for cached results, in seconds |
 | `reranker` | `BaseReranker \| None` | `None` | Post-retrieval reranker (see [Reranking](reranking.md)) |
+| `retry` | `RetryConfig \| None` | `None` | Retry with exponential backoff for transient failures |
+| `reuse_search_server` | `bool` | `True` | Keep the search HTTP server alive across queries for lower latency |
+
+---
+
+### `.query_batch()` Method
+
+Run multiple queries concurrently using a thread pool (sync) or `asyncio.gather` (async).
+
+```python
+results = engine.query_batch(
+    ["Question 1?", "Question 2?", "Question 3?"],
+    max_concurrency=4,
+)
+for r in results:
+    print(r.answer[:100])
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `queries` | `list[str]` | **required** | List of query strings (max 10,000) |
+| `max_concurrency` | `int` | `4` | Max parallel queries. Must be >= 1 |
+| `root_prompt` | `str \| None` | `None` | Short prompt visible to each root LM |
+| `top_k` | `int \| None` | `None` | Override config `top_k` for this batch |
+| `budget` | `QueryBudget \| None` | `None` | Per-query resource limits |
+
+Returns `list[DeepRecallResult]` in the same order as the input queries. Failed queries return a result with the `error` field set.
 
 ---
 

@@ -1,12 +1,12 @@
 <h1 align="center">DeepRecall</h1>
 
 <p align="center">
-  <b>Recursive reasoning over your data. Plug into any vector DB or agent framework.</b>
+  <b>Recursive reasoning over your data. Plug into any vector DB or LLM framework.</b>
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/deeprecall/"><img src="https://img.shields.io/pypi/v/deeprecall?color=blue&v=2" alt="PyPI"></a>
-  <a href="https://pypi.org/project/deeprecall/"><img src="https://img.shields.io/pypi/pyversions/deeprecall?v=2" alt="Python"></a>
+  <a href="https://pypi.org/project/deeprecall/"><img src="https://img.shields.io/pypi/v/deeprecall?color=blue&v=3" alt="PyPI"></a>
+  <a href="https://pypi.org/project/deeprecall/"><img src="https://img.shields.io/pypi/pyversions/deeprecall?v=3" alt="Python"></a>
   <a href="https://github.com/kothapavan1998/deeprecall/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
 </p>
 
@@ -19,14 +19,23 @@ The LLM gets a `search_db()` function injected into a sandboxed Python REPL. It 
 ## Install
 
 ```bash
-pip install deeprecall[chroma]    # ChromaDB (local, zero-config)
-pip install deeprecall[milvus]    # Milvus
-pip install deeprecall[qdrant]    # Qdrant
-pip install deeprecall[pinecone]  # Pinecone
-pip install deeprecall[redis]     # Redis distributed cache
-pip install deeprecall[otel]      # OpenTelemetry tracing
-pip install deeprecall[all]       # Everything
+pip install deeprecall[chroma]              # ChromaDB (local, zero-config)
+pip install deeprecall[milvus]              # Milvus
+pip install deeprecall[qdrant]              # Qdrant
+pip install deeprecall[pinecone]            # Pinecone
+pip install deeprecall[faiss]               # FAISS (local, ML-native)
+pip install deeprecall[server]              # API server (FastAPI + uvicorn)
+pip install deeprecall[rich]                # Rich console output (verbose mode)
+pip install deeprecall[redis]               # Redis distributed cache
+pip install deeprecall[otel]                # OpenTelemetry tracing
+pip install deeprecall[langchain]           # LangChain adapter
+pip install deeprecall[llamaindex]          # LlamaIndex adapter
+pip install deeprecall[rerank-cohere]       # Cohere reranker
+pip install deeprecall[rerank-cross-encoder] # Cross-encoder reranker
+pip install deeprecall[all]                 # Everything
 ```
+
+> **Note**: DeepRecall depends on `rlms` which transitively installs its own dependencies (OpenAI SDK, etc.). If you see dependency conflicts, check `pip show rlms` for the transitive tree.
 
 ## Quick Start
 
@@ -37,20 +46,86 @@ from deeprecall.vectorstores import ChromaStore
 store = ChromaStore(collection_name="my_docs")
 store.add_documents(["doc 1 text...", "doc 2 text...", "doc 3 text..."])
 
-engine = DeepRecall(
+# Context manager ensures cleanup (search server, connections)
+with DeepRecall(
     vectorstore=store,
     backend="openai",
     backend_kwargs={"model_name": "gpt-4o-mini", "api_key": "sk-..."},
-)
-
-result = engine.query("What are the key themes across these documents?")
-print(result.answer)
-print(f"Sources: {len(result.sources)}")
-print(f"Steps: {len(result.reasoning_trace)}")
-print(f"Time: {result.execution_time:.1f}s")
+) as engine:
+    result = engine.query("What are the key themes across these documents?")
+    print(result.answer)
+    print(f"Sources: {len(result.sources)}")
+    print(f"Steps: {len(result.reasoning_trace)}")
+    print(f"Time: {result.execution_time:.1f}s")
 ```
 
-## What's New in v0.2
+> **Tip**: Always use `with` or call `engine.close()` when done to release background resources. Vector stores with persistent connections (Milvus, Qdrant) also support `with store:` for automatic cleanup.
+
+## What's New in v0.3
+
+### Exception Handling
+
+All DeepRecall errors inherit from `DeepRecallError` -- catch at the boundary for production use.
+
+```python
+from deeprecall import DeepRecall, DeepRecallError, LLMProviderError, VectorStoreError
+
+try:
+    result = engine.query("question")
+except LLMProviderError:
+    # LLM call failed (timeout, rate limit, etc.)
+    ...
+except VectorStoreError:
+    # Vector DB unreachable or query failed
+    ...
+except DeepRecallError:
+    # Catch-all for any DeepRecall error
+    ...
+```
+
+### Retry with Exponential Backoff
+
+Automatic retries for transient LLM and vector store failures.
+
+```python
+from deeprecall import DeepRecall, DeepRecallConfig, RetryConfig
+
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    retry=RetryConfig(max_retries=3, base_delay=1.0, jitter=True),
+)
+engine = DeepRecall(vectorstore=store, config=config)
+```
+
+### Batch Queries
+
+Run multiple queries concurrently with a thread pool.
+
+```python
+results = engine.query_batch(
+    ["Question 1?", "Question 2?", "Question 3?"],
+    max_concurrency=4,
+)
+for r in results:
+    print(r.answer[:100])
+```
+
+### FAISS Vector Store
+
+Local vector index used by most ML teams.
+
+```python
+from deeprecall.vectorstores import FAISSStore
+
+store = FAISSStore(dimension=384, embedding_fn=my_embed_fn)
+store.add_documents(["Hello world", "Foo bar"])
+results = store.search("greeting")
+
+# Persistence
+store.save("./my_index")
+store = FAISSStore.load("./my_index", embedding_fn=my_embed_fn)
+```
 
 ### Budget Guardrails
 
@@ -133,13 +208,20 @@ config = DeepRecallConfig(
 Avoid redundant LLM and vector DB calls. Three backends: in-memory (dev), SQLite (single-machine), Redis (distributed/production).
 
 ```python
-from deeprecall import DeepRecall, DeepRecallConfig, InMemoryCache, RedisCache
+from deeprecall import DeepRecall, DeepRecallConfig, InMemoryCache, DiskCache, RedisCache
 
-# In-memory (fastest, ephemeral)
+# In-memory (fastest, ephemeral -- good for dev)
 config = DeepRecallConfig(
     backend="openai",
     backend_kwargs={"model_name": "gpt-4o-mini"},
     cache=InMemoryCache(max_size=500, default_ttl=3600),
+)
+
+# Disk / SQLite (persists across restarts, single machine)
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    cache=DiskCache(db_path="./deeprecall_cache.db"),
 )
 
 # Redis (distributed, production -- works with AWS ElastiCache, GCP Memorystore, etc.)
@@ -147,7 +229,6 @@ config = DeepRecallConfig(
     backend="openai",
     backend_kwargs={"model_name": "gpt-4o-mini"},
     cache=RedisCache(url="redis://localhost:6379/0"),
-    # Or: RedisCache(url="rediss://my-cluster.abc123.cache.amazonaws.com:6379/0")
 )
 engine = DeepRecall(vectorstore=store, config=config)
 # Second identical query hits cache -- zero LLM cost
@@ -158,7 +239,7 @@ engine = DeepRecall(vectorstore=store, config=config)
 Improve search quality with Cohere or cross-encoder rerankers.
 
 ```python
-from deeprecall.core.reranker import CohereReranker
+from deeprecall.core import CohereReranker  # or: CrossEncoderReranker
 
 config = DeepRecallConfig(
     backend="openai",
@@ -180,16 +261,10 @@ engine = AsyncDeepRecall(vectorstore=store, backend="openai",
 # Non-blocking -- multiple queries can run concurrently
 result = await engine.query("question")
 await engine.add_documents(["new doc..."])
+
+# Async batch queries
+results = await engine.query_batch(["q1?", "q2?"], max_concurrency=4)
 ```
-
-Thread safety highlights:
-
-- **Server endpoints** -- `query`, `add_documents`, `cache/clear` all run in the thread pool, never blocking the event loop
-- **Callbacks** -- `UsageTrackingCallback` counters and `JSONLCallback` file writes are lock-protected for concurrent queries
-- **OpenTelemetry** -- span state is thread-local, so parallel queries produce isolated traces
-- **Rate limiter** -- bucket state is lock-protected against concurrent access
-- **Redis cache** -- uses the thread-safe `redis-py` client; hit/miss counters are lock-protected
-- **Auth middleware** -- supports both sync and async `validate_fn`; sync validators run in a thread
 
 ### Server Auth & Rate Limiting
 
@@ -213,8 +288,34 @@ deeprecall serve --api-keys "key1,key2" --rate-limit 60 --port 8000
 | Milvus | `deeprecall[milvus]` | Yes |
 | Qdrant | `deeprecall[qdrant]` | Yes |
 | Pinecone | `deeprecall[pinecone]` | Yes |
+| FAISS | `deeprecall[faiss]` | Yes |
 
-All stores implement the same interface: `add_documents()`, `search()`, `delete()`, `count()`.
+All stores implement the same interface: `add_documents()`, `search()`, `delete()`, `count()`, `close()`.
+
+All stores support context managers for automatic cleanup:
+
+```python
+with ChromaStore(collection_name="my_docs") as store:
+    store.add_documents(["Hello world"])
+    results = store.search("greeting")
+# connections released automatically
+```
+
+### Custom Embedding Functions
+
+Stores that require `embedding_fn` expect a callable with this signature:
+
+```python
+def my_embed_fn(texts: list[str]) -> list[list[float]]:
+    """Takes a list of strings, returns a list of embedding vectors."""
+    # Example using OpenAI:
+    from openai import OpenAI
+    client = OpenAI()
+    response = client.embeddings.create(input=texts, model="text-embedding-3-small")
+    return [e.embedding for e in response.data]
+
+store = MilvusStore(collection_name="docs", embedding_fn=my_embed_fn)
+```
 
 ## Framework Adapters
 
@@ -232,30 +333,40 @@ deeprecall ingest --path ./docs/       # Ingest documents
 deeprecall query "question" --max-searches 10 --max-time 30
 deeprecall serve --port 8000 --api-keys "key1,key2"
 deeprecall delete doc_id_1 doc_id_2    # Delete documents
+deeprecall status                      # Show version, installed extras
+deeprecall benchmark --queries q.json  # Run benchmark
 ```
+
+The CLI automatically loads environment variables from a `.env` file via `python-dotenv`, so you can set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. without exporting them in your shell.
 
 ## Project Structure
 
 ```
 deeprecall/
 ├── core/           # Engine, config, guardrails, tracer, cache, callbacks, reranker
+│   ├── exceptions.py    # DeepRecallError hierarchy
+│   ├── retry.py         # Exponential backoff with jitter
+│   ├── deprecations.py  # @deprecated decorator
+│   ├── logging_config.py # configure_logging() helper
 │   ├── cache.py          # InMemoryCache, DiskCache (SQLite)
 │   ├── cache_redis.py    # RedisCache (distributed)
-│   ├── callbacks.py      # ConsoleCallback, JSONLCallback, UsageTrackingCallback
+│   ├── callbacks.py      # ConsoleCallback, JSONLCallback, UsageTrackingCallback, ProgressCallback
 │   ├── callback_otel.py  # OpenTelemetry distributed tracing
 │   ├── async_engine.py   # AsyncDeepRecall (non-blocking wrapper)
 │   └── ...
-├── vectorstores/   # ChromaDB, Milvus, Qdrant, Pinecone adapters
+├── vectorstores/   # ChromaDB, Milvus, Qdrant, Pinecone, FAISS adapters
 ├── adapters/       # LangChain, LlamaIndex, OpenAI-compatible server
 ├── middleware/      # API key auth (sync + async), rate limiting (thread-safe)
 ├── prompts/        # System prompts for the RLM
 └── cli.py          # CLI entry point
 
 tests/
+├── test_exceptions.py    # Exception hierarchy tests
+├── test_retry.py         # Retry logic tests
+├── test_batch.py         # Batch query tests
+├── test_deprecations.py  # Deprecation utility tests
 ├── test_concurrency.py   # Thread safety & race condition tests
-├── test_cache_redis.py   # Redis cache unit tests
-├── test_callback_otel.py # OpenTelemetry callback unit tests
-└── ...                   # 114+ tests total
+└── ...                   # 361 tests total (358 unit + 3 e2e)
 ```
 
 ## Contributing

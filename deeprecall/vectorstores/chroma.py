@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from deeprecall.core.exceptions import VectorStoreConnectionError, VectorStoreError
 from deeprecall.core.types import SearchResult
 from deeprecall.vectorstores.base import BaseVectorStore
 
@@ -49,14 +50,20 @@ class ChromaStore(BaseVectorStore):
                 "Install it with: pip install deeprecall[chroma]"
             ) from None
 
-        if host is not None:
-            self._client = chromadb.HttpClient(host=host, port=port)
-        elif persist_directory is not None:
-            self._client = chromadb.PersistentClient(path=persist_directory)
-        else:
-            self._client = chromadb.Client()
+        try:
+            if host is not None:
+                self._client = chromadb.HttpClient(host=host, port=port)
+            elif persist_directory is not None:
+                self._client = chromadb.PersistentClient(path=persist_directory)
+            else:
+                self._client = chromadb.Client()
 
-        self._collection = self._client.get_or_create_collection(name=collection_name)
+            self._collection = self._client.get_or_create_collection(name=collection_name)
+        except ImportError:
+            raise
+        except Exception as e:
+            raise VectorStoreConnectionError(f"Failed to connect to ChromaDB: {e}") from e
+
         self._collection_name = collection_name
 
     def add_documents(
@@ -83,7 +90,10 @@ class ChromaStore(BaseVectorStore):
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
 
-        self._collection.add(**kwargs)
+        try:
+            self._collection.add(**kwargs)
+        except Exception as e:
+            raise VectorStoreError(f"ChromaDB add_documents failed: {e}") from e
         return ids
 
     def search(
@@ -92,35 +102,47 @@ class ChromaStore(BaseVectorStore):
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
-        doc_count = self._collection.count()
-        kwargs: dict[str, Any] = {
-            "query_texts": [query],
-            "n_results": min(top_k, doc_count) if doc_count > 0 else top_k,
-        }
+        try:
+            doc_count = self._collection.count()
+            if doc_count == 0:
+                return []
 
-        if filters is not None:
-            kwargs["where"] = filters
+            kwargs: dict[str, Any] = {
+                "query_texts": [query],
+                "n_results": min(top_k, doc_count),
+            }
 
-        query_embeddings = self._generate_embeddings([query])
-        if query_embeddings is not None:
-            kwargs["query_embeddings"] = query_embeddings
-            kwargs.pop("query_texts", None)
+            if filters is not None:
+                kwargs["where"] = filters
 
-        results = self._collection.query(**kwargs)
+            query_embeddings = self._generate_embeddings([query])
+            if query_embeddings is not None:
+                kwargs["query_embeddings"] = query_embeddings
+                kwargs.pop("query_texts", None)
+
+            results = self._collection.query(**kwargs)
+        except VectorStoreError:
+            raise
+        except Exception as e:
+            raise VectorStoreError(f"ChromaDB search failed: {e}") from e
 
         search_results: list[SearchResult] = []
         if results and results["documents"]:
             docs = results["documents"][0]
-            metas = results["metadatas"][0] if results["metadatas"] else [{}] * len(docs)
+            metas = results["metadatas"][0] if results["metadatas"] else [{} for _ in docs]
             distances = results["distances"][0] if results["distances"] else [0.0] * len(docs)
             result_ids = results["ids"][0] if results["ids"] else [""] * len(docs)
 
             for doc, meta, dist, rid in zip(docs, metas, distances, result_ids, strict=False):
+                # ChromaDB returns distances (lower = more similar).
+                # For L2: score = 1 / (1 + dist) maps [0, inf) -> (0, 1]
+                # For cosine/IP: dist is typically in [0, 2], so same formula works.
+                score = 1.0 / (1.0 + dist) if dist >= 0 else 0.0
                 search_results.append(
                     SearchResult(
                         content=doc,
                         metadata=meta or {},
-                        score=max(0.0, 1.0 - dist),  # ChromaDB distances -> similarity, clamped
+                        score=score,
                         id=rid,
                     )
                 )
@@ -128,7 +150,13 @@ class ChromaStore(BaseVectorStore):
         return search_results
 
     def delete(self, ids: list[str]) -> None:
-        self._collection.delete(ids=ids)
+        try:
+            self._collection.delete(ids=ids)
+        except Exception as e:
+            raise VectorStoreError(f"ChromaDB delete failed: {e}") from e
 
     def count(self) -> int:
-        return self._collection.count()
+        try:
+            return self._collection.count()
+        except Exception as e:
+            raise VectorStoreError(f"ChromaDB count failed: {e}") from e

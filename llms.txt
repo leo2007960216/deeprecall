@@ -1,0 +1,25 @@
+# DeepRecall
+
+> Recursive reasoning engine for vector databases. Uses MIT's RLM to let LLMs search, reason, search again, and repeat -- replacing single-pass RAG with multi-hop recursive retrieval.
+
+## Docs
+
+- [Quickstart](https://github.com/kothapavan1998/deeprecall/blob/main/docs/quickstart.md): Install and first query in 5 lines
+- [API Reference](https://github.com/kothapavan1998/deeprecall/blob/main/docs/api-reference.md): Every class, method, and parameter
+- [Architecture](https://github.com/kothapavan1998/deeprecall/blob/main/docs/architecture.md): How the recursive reasoning loop works
+- [Vector Stores](https://github.com/kothapavan1998/deeprecall/blob/main/docs/vectorstores.md): ChromaDB, Milvus, Qdrant, Pinecone, FAISS adapters
+- [Framework Adapters](https://github.com/kothapavan1998/deeprecall/blob/main/docs/adapters.md): LangChain, LlamaIndex, OpenAI-compatible API
+- [LLM Backends](https://github.com/kothapavan1998/deeprecall/blob/main/docs/backends.md): OpenAI, Anthropic, Gemini, and more
+- [Budget Guardrails](https://github.com/kothapavan1998/deeprecall/blob/main/docs/guardrails.md): Token, time, cost, and search limits
+- [Caching](https://github.com/kothapavan1998/deeprecall/blob/main/docs/caching.md): InMemory, Disk (SQLite), Redis
+- [Callbacks](https://github.com/kothapavan1998/deeprecall/blob/main/docs/callbacks.md): Console, JSONL, Usage, OpenTelemetry
+- [Reranking](https://github.com/kothapavan1998/deeprecall/blob/main/docs/reranking.md): Cohere, CrossEncoder
+- [Async & Concurrency](https://github.com/kothapavan1998/deeprecall/blob/main/docs/async.md): AsyncDeepRecall, thread safety
+- [CLI Reference](https://github.com/kothapavan1998/deeprecall/blob/main/docs/cli.md): init, ingest, query, serve, delete, status, benchmark
+- [Server](https://github.com/kothapavan1998/deeprecall/blob/main/docs/server.md): OpenAI-compatible REST API with auth and rate limiting
+
+## Optional
+
+- [Changelog](https://github.com/kothapavan1998/deeprecall/blob/main/CHANGELOG.md): Version history
+- [Contributing](https://github.com/kothapavan1998/deeprecall/blob/main/CONTRIBUTING.md): Development setup and PR guidelines
+- [PyPI](https://pypi.org/project/deeprecall/): Package page

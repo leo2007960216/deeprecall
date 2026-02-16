@@ -46,6 +46,12 @@ class BaseCallback:  # noqa: B024
     def on_budget_warning(self, status: BudgetStatus) -> None:  # noqa: B027
         """Called when a budget limit is exceeded."""
 
+    def on_sub_llm_call(self, prompt_preview: str, response_preview: str) -> None:  # noqa: B027
+        """Called after a sub-LLM call completes."""
+
+    def on_progress(self, message: str, percent: float | None = None) -> None:  # noqa: B027
+        """Called to report progress updates."""
+
 
 class CallbackManager:
     """Manages and dispatches events to multiple callbacks."""
@@ -91,6 +97,14 @@ class CallbackManager:
         for cb in self.callbacks:
             self._safe_call(cb, "on_budget_warning", status)
 
+    def on_sub_llm_call(self, prompt_preview: str, response_preview: str) -> None:
+        for cb in self.callbacks:
+            self._safe_call(cb, "on_sub_llm_call", prompt_preview, response_preview)
+
+    def on_progress(self, message: str, percent: float | None = None) -> None:
+        for cb in self.callbacks:
+            self._safe_call(cb, "on_progress", message, percent)
+
 
 # ---------------------------------------------------------------------------
 # Built-in callback implementations
@@ -103,13 +117,13 @@ class ConsoleCallback(BaseCallback):
     def __init__(self, show_code: bool = True, show_output: bool = True):
         self.show_code = show_code
         self.show_output = show_output
-        self._start_time: float | None = None
+        self._start_time = threading.local()
 
     def on_query_start(self, query: str, config: DeepRecallConfig) -> None:
         from rich.console import Console
         from rich.panel import Panel
 
-        self._start_time = time.perf_counter()
+        self._start_time.value = time.perf_counter()
         console = Console()
         console.print(Panel(f"[bold]{query}[/bold]", title="Query", border_style="cyan"))
 
@@ -117,7 +131,8 @@ class ConsoleCallback(BaseCallback):
         from rich.console import Console
 
         console = Console()
-        elapsed = time.perf_counter() - (self._start_time or time.perf_counter())
+        start = getattr(self._start_time, "value", None) or time.perf_counter()
+        elapsed = time.perf_counter() - start
 
         header = (
             f"[bold]Step {step.iteration}[/bold] | "
@@ -192,11 +207,24 @@ class JSONLCallback(BaseCallback):
             },
         )
 
+    def on_search(self, query: str, num_results: int, time_ms: float) -> None:
+        self._write(
+            "search", {"query": query, "num_results": num_results, "time_ms": round(time_ms, 2)}
+        )
+
     def on_error(self, error: Exception) -> None:
         self._write("error", {"error": str(error), "type": type(error).__name__})
 
     def on_budget_warning(self, status: BudgetStatus) -> None:
         self._write("budget_warning", {"status": status.to_dict()})
+
+    def on_sub_llm_call(self, prompt_preview: str, response_preview: str) -> None:
+        self._write(
+            "sub_llm_call", {"prompt": prompt_preview[:200], "response": response_preview[:200]}
+        )
+
+    def on_progress(self, message: str, percent: float | None = None) -> None:
+        self._write("progress", {"message": message, "percent": percent})
 
 
 class UsageTrackingCallback(BaseCallback):
@@ -236,3 +264,42 @@ class UsageTrackingCallback(BaseCallback):
                 "total_time": round(self.total_time, 2),
                 "errors": self.errors,
             }
+
+
+class ProgressCallback(BaseCallback):
+    """Thread-safe callback that accumulates all progress events.
+
+    Useful for UIs or test harnesses that need to inspect the full event stream.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.events: list[dict[str, Any]] = []
+
+    def _record(self, event_type: str, data: dict[str, Any]) -> None:
+        with self._lock:
+            self.events.append({"type": event_type, "timestamp": time.time(), **data})
+
+    def on_query_start(self, query: str, config: DeepRecallConfig) -> None:
+        self._record("query_start", {"query": query})
+
+    def on_reasoning_step(self, step: ReasoningStep, budget_status: BudgetStatus) -> None:
+        self._record("reasoning_step", {"iteration": step.iteration, "action": step.action})
+
+    def on_search(self, query: str, num_results: int, time_ms: float) -> None:
+        self._record("search", {"query": query, "num_results": num_results, "time_ms": time_ms})
+
+    def on_query_end(self, result: DeepRecallResult) -> None:
+        self._record("query_end", {"answer_length": len(result.answer)})
+
+    def on_error(self, error: Exception) -> None:
+        self._record("error", {"error": str(error)})
+
+    def on_budget_warning(self, status: BudgetStatus) -> None:
+        self._record("budget_warning", {"reason": status.exceeded_reason})
+
+    def on_sub_llm_call(self, prompt_preview: str, response_preview: str) -> None:
+        self._record("sub_llm_call", {"prompt": prompt_preview, "response": response_preview})
+
+    def on_progress(self, message: str, percent: float | None = None) -> None:
+        self._record("progress", {"message": message, "percent": percent})

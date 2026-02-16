@@ -69,3 +69,20 @@ class TestChromaStore:
 
         results = store.search("programming", top_k=5, filters={"lang": "python"})
         assert all(r.metadata.get("lang") == "python" for r in results)
+
+    def test_close_does_not_raise(self):
+        from deeprecall.vectorstores.chroma import ChromaStore
+
+        store = ChromaStore(collection_name="test_close")
+        store.add_documents(["test"])
+        store.close()  # Should not raise
+
+    def test_context_manager(self):
+        from deeprecall.vectorstores.chroma import ChromaStore
+
+        with ChromaStore(collection_name="test_ctx_mgr") as store:
+            ids = store.add_documents(["Hello context manager"])
+            assert len(ids) == 1
+            assert store.count() == 1
+        # After exit, store.close() was called -- no assertion needed,
+        # just verify the block completed without error

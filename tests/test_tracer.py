@@ -62,10 +62,9 @@ class TestDeepRecallTracer:
         tracer = DeepRecallTracer(budget=budget)
 
         tracer.log(_make_mock_iteration())  # iteration 1 - ok
-        tracer.log(_make_mock_iteration())  # iteration 2 - ok
 
         with pytest.raises(BudgetExceededError):
-            tracer.log(_make_mock_iteration())  # iteration 3 - exceeds budget
+            tracer.log(_make_mock_iteration())  # iteration 2 - hits limit (2 >= 2)
 
     def test_final_answer_action(self):
         tracer = DeepRecallTracer()

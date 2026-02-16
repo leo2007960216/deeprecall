@@ -37,9 +37,9 @@ Supported file types: `.txt`, `.md`, `.py`, `.json`, `.csv`.
 | Option | Default | Description |
 |---|---|---|
 | `--path` | **required** | File or directory to ingest |
-| `--vectorstore` | `chroma` | Backend: `chroma`, `milvus`, `qdrant`, `pinecone` |
+| `--vectorstore` | `chroma` | Backend: `chroma`, `milvus`, `qdrant`, `pinecone`, `faiss` |
 | `--collection` | `deeprecall` | Collection/index name |
-| `--persist-dir` | `./chroma_db` | Persist directory (ChromaDB only) |
+| `--persist-dir` | auto | Persist directory (`./chroma_db` for ChromaDB, `./faiss_index` for FAISS) |
 
 ---
 
@@ -118,6 +118,48 @@ deeprecall delete --collection research --vectorstore milvus doc-abc
 | `--vectorstore` | `chroma` | Backend: `chroma`, `milvus`, `qdrant`, `pinecone` |
 | `--collection` | `deeprecall` | Collection/index name |
 | `--persist-dir` | `./chroma_db` | Persist directory (ChromaDB only) |
+
+---
+
+## `deeprecall status`
+
+Show version, installed extras, and system info.
+
+```bash
+deeprecall status
+```
+
+**Output:**
+
+```
+DeepRecall v0.3.0
+Python: 3.12.8
+RLM: 0.1.0
+Installed extras: chroma, faiss, server, rich
+```
+
+---
+
+## `deeprecall benchmark`
+
+Run a set of queries from a JSON file and collect timing/quality metrics.
+
+```bash
+deeprecall benchmark --queries queries.json
+deeprecall benchmark --queries queries.json --output results.json
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--queries` | **required** | Path to JSON file containing an array of query strings |
+| `--output` | `None` | Path to write structured JSON results |
+| `--vectorstore` | `chroma` | Backend: `chroma`, `milvus`, `qdrant`, `pinecone`, `faiss` |
+| `--collection` | `deeprecall` | Collection/index name |
+| `--persist-dir` | `None` | Persist directory |
+| `--backend` | `openai` | LLM backend |
+| `--model` | `gpt-4o-mini` | LLM model name |
+
+**Limits:** JSON file must be under 10 MB and contain a JSON array.
 
 ---
 

@@ -49,6 +49,7 @@ class AsyncDeepRecallEngine:
         **kwargs: Any,
     ):
         self._engine = DeepRecallEngine(vectorstore=vectorstore, config=config, **kwargs)
+        self._batch_lock = asyncio.Lock()
 
     async def query(
         self,
@@ -75,6 +76,69 @@ class AsyncDeepRecallEngine:
             top_k,
             budget,
         )
+
+    async def query_batch(
+        self,
+        queries: list[str],
+        *,
+        max_concurrency: int = 4,
+        root_prompt: str | None = None,
+        top_k: int | None = None,
+        budget: QueryBudget | None = None,
+    ) -> list[DeepRecallResult]:
+        """Execute multiple queries concurrently using asyncio.
+
+        Returns a list of DeepRecallResult in the same order as *queries*.
+
+        Raises:
+            ValueError: If the batch exceeds 10 000 queries or max_concurrency < 1.
+        """
+        from deeprecall.core.types import UsageInfo
+
+        if len(queries) > 10_000:
+            raise ValueError(
+                f"Batch size {len(queries)} exceeds maximum of 10,000. Split into smaller batches."
+            )
+        if max_concurrency < 1:
+            raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
+
+        # Hold an asyncio.Lock for the full batch lifetime to prevent
+        # concurrent batches from corrupting the saved reuse_search_server flag.
+        async with self._batch_lock:
+            saved_reuse = self._engine.config.reuse_search_server
+            self._engine.config.reuse_search_server = False
+
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def _run(q: str) -> DeepRecallResult:
+                async with semaphore:
+                    return await self.query(q, root_prompt=root_prompt, top_k=top_k, budget=budget)
+
+            try:
+                tasks = [_run(q) for q in queries]
+                settled = await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                self._engine.config.reuse_search_server = saved_reuse
+
+        results: list[DeepRecallResult] = []
+        for i, outcome in enumerate(settled):
+            if isinstance(outcome, BaseException):
+                results.append(
+                    DeepRecallResult(
+                        answer="",
+                        sources=[],
+                        reasoning_trace=[],
+                        usage=UsageInfo(),
+                        execution_time=0.0,
+                        query=queries[i],
+                        budget_status={},
+                        error=str(outcome),
+                        confidence=None,
+                    )
+                )
+            else:
+                results.append(outcome)
+        return results
 
     async def add_documents(
         self,

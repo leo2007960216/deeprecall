@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from deeprecall.core.exceptions import VectorStoreConnectionError, VectorStoreError
 from deeprecall.core.types import SearchResult
 from deeprecall.vectorstores.base import BaseVectorStore
 
@@ -72,21 +73,28 @@ class PineconeStore(BaseVectorStore):
                     "Pinecone API key is required. Pass api_key or set PINECONE_API_KEY."
                 )
 
-        self._pc = Pinecone(api_key=api_key)
-        self._namespace = namespace
-        self._dimension = dimension
+        try:
+            self._pc = Pinecone(api_key=api_key)
+            self._namespace = namespace
+            self._dimension = dimension
 
-        # Create index if it doesn't exist
-        existing = [idx.name for idx in self._pc.list_indexes()]
-        if index_name not in existing:
-            self._pc.create_index(
-                name=index_name,
-                dimension=dimension,
-                metric=metric,
-                spec=ServerlessSpec(cloud=cloud, region=region),
-            )
+            # Create index if it doesn't exist
+            existing = [idx.name for idx in self._pc.list_indexes()]
+            if index_name not in existing:
+                self._pc.create_index(
+                    name=index_name,
+                    dimension=dimension,
+                    metric=metric,
+                    spec=ServerlessSpec(cloud=cloud, region=region),
+                )
 
-        self._index = self._pc.Index(index_name)
+            self._index = self._pc.Index(index_name)
+        except ImportError:
+            raise
+        except ValueError:
+            raise
+        except Exception as e:
+            raise VectorStoreConnectionError(f"Failed to connect to Pinecone: {e}") from e
 
     def add_documents(
         self,
@@ -110,17 +118,25 @@ class PineconeStore(BaseVectorStore):
 
         vectors = []
         for i, (doc_id, doc, emb) in enumerate(zip(ids, documents, embeddings, strict=False)):
-            meta: dict[str, Any] = {"content": doc}
+            meta: dict[str, Any] = {}
             if metadatas and i < len(metadatas):
                 meta.update(metadatas[i])
+            # Store document text under a reserved key so user metadata
+            # with a "content" key cannot overwrite it.
+            meta["_deeprecall_content"] = doc
 
             vectors.append({"id": doc_id, "values": emb, "metadata": meta})
 
         # Upsert in batches of 100
         batch_size = 100
-        for i in range(0, len(vectors), batch_size):
-            batch = vectors[i : i + batch_size]
-            self._index.upsert(vectors=batch, namespace=self._namespace)
+        for batch_start in range(0, len(vectors), batch_size):
+            batch = vectors[batch_start : batch_start + batch_size]
+            try:
+                self._index.upsert(vectors=batch, namespace=self._namespace)
+            except Exception as e:
+                raise VectorStoreError(
+                    f"Pinecone upsert failed at batch starting index {batch_start}: {e}"
+                ) from e
 
         return ids
 
@@ -146,22 +162,34 @@ class PineconeStore(BaseVectorStore):
         if filters is not None:
             query_kwargs["filter"] = filters
 
-        response = self._index.query(**query_kwargs)
+        try:
+            response = self._index.query(**query_kwargs)
+        except Exception as e:
+            raise VectorStoreError(f"Pinecone search failed: {e}") from e
 
         # Pinecone SDK v5+ returns objects with attribute access (.matches, .id, .score)
         # Older versions may return dicts. Handle both gracefully.
-        matches = getattr(response, "matches", None) or response.get("matches", [])
+        # Use `is None` checks instead of `or` to preserve falsy values (0.0, "", {}).
+        _matches = getattr(response, "matches", None)
+        matches = _matches if _matches is not None else response.get("matches", [])
 
         search_results: list[SearchResult] = []
         for match in matches:
-            match_id = getattr(match, "id", None) or match.get("id", "")
-            match_score = getattr(match, "score", None) or match.get("score", 0.0)
-            raw_metadata = getattr(match, "metadata", None) or match.get("metadata", {})
+            _id = getattr(match, "id", None)
+            match_id = _id if _id is not None else match.get("id", "")
+            _score = getattr(match, "score", None)
+            match_score = _score if _score is not None else match.get("score", 0.0)
+            _meta = getattr(match, "metadata", None)
+            raw_metadata = _meta if _meta is not None else match.get("metadata", {})
             if raw_metadata is None:
                 raw_metadata = {}
 
-            content = raw_metadata.get("content", "")
-            metadata = {k: v for k, v in raw_metadata.items() if k != "content"}
+            # Read from reserved key; fall back to legacy "content" for old data.
+            # Use `is not None` to preserve empty-string content.
+            content = raw_metadata.pop("_deeprecall_content", None)
+            if content is None:
+                content = raw_metadata.pop("content", "")
+            metadata = dict(raw_metadata)
             search_results.append(
                 SearchResult(
                     content=content,
@@ -174,15 +202,25 @@ class PineconeStore(BaseVectorStore):
         return search_results
 
     def delete(self, ids: list[str]) -> None:
-        self._index.delete(ids=ids, namespace=self._namespace)
+        try:
+            self._index.delete(ids=ids, namespace=self._namespace)
+        except Exception as e:
+            raise VectorStoreError(f"Pinecone delete failed: {e}") from e
 
     def count(self) -> int:
-        stats = self._index.describe_index_stats()
-        # SDK v5+ returns object with attributes; older returns dict
-        if self._namespace:
-            namespaces = getattr(stats, "namespaces", None) or stats.get("namespaces", {})
-            ns_stats = namespaces.get(self._namespace, {})
-            count = getattr(ns_stats, "vector_count", None) or ns_stats.get("vector_count", 0)
-        else:
-            count = getattr(stats, "total_vector_count", None) or stats.get("total_vector_count", 0)
-        return int(count)
+        try:
+            stats = self._index.describe_index_stats()
+            # SDK v5+ returns object with attributes; older returns dict.
+            # Use `is None` to preserve 0 counts.
+            if self._namespace:
+                _ns = getattr(stats, "namespaces", None)
+                namespaces = _ns if _ns is not None else stats.get("namespaces", {})
+                ns_stats = namespaces.get(self._namespace, {})
+                _vc = getattr(ns_stats, "vector_count", None)
+                count = _vc if _vc is not None else ns_stats.get("vector_count", 0)
+            else:
+                _tc = getattr(stats, "total_vector_count", None)
+                count = _tc if _tc is not None else stats.get("total_vector_count", 0)
+            return int(count)
+        except Exception as e:
+            raise VectorStoreError(f"Pinecone count failed: {e}") from e

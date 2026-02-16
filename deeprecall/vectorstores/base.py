@@ -56,7 +56,9 @@ class BaseVectorStore(ABC):
         ids: list[str] | None = None,
         embeddings: list[list[float]] | None = None,
     ) -> None:
-        """Validate that input list lengths match."""
+        """Validate that input list lengths match and documents is non-empty."""
+        if not documents:
+            raise ValueError("documents must be a non-empty list")
         n = len(documents)
         if metadatas is not None and len(metadatas) != n:
             raise ValueError(
@@ -101,6 +103,18 @@ class BaseVectorStore(ABC):
     def count(self) -> int:
         """Return the total number of documents in the store."""
         raise NotImplementedError
+
+    def close(self) -> None:  # noqa: B027
+        """Release any resources held by the vector store.
+
+        Subclasses with persistent connections should override this.
+        """
+
+    def __enter__(self) -> BaseVectorStore:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _generate_embeddings(self, texts: list[str]) -> list[list[float]] | None:
         """Generate embeddings using the custom embedding function if provided."""

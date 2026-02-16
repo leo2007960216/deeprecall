@@ -7,16 +7,22 @@ that the REPL's search_db() function calls via urllib.
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 
+from deeprecall.core.exceptions import VectorStoreError
 from deeprecall.core.types import Source
 from deeprecall.vectorstores.base import BaseVectorStore
 
+_logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from deeprecall.core.cache import BaseCache
+    from deeprecall.core.callbacks import CallbackManager
     from deeprecall.core.reranker import BaseReranker
 
 
@@ -26,6 +32,7 @@ class _SearchHandler(BaseHTTPRequestHandler):
     vectorstore: BaseVectorStore
     reranker: BaseReranker | None
     cache: BaseCache | None
+    callback_manager: CallbackManager | None
     accessed_sources: list[Source]
     _lock: threading.Lock
 
@@ -50,8 +57,11 @@ class _SearchHandler(BaseHTTPRequestHandler):
             if self.cache is not None:
                 import hashlib
 
+                # Sort filters for deterministic cache keys regardless of dict order
+                filters_str = json.dumps(filters, sort_keys=True) if filters else ""
                 cache_key = (
-                    "search:" + hashlib.sha256(f"{query}|{top_k}|{filters}".encode()).hexdigest()
+                    "search:"
+                    + hashlib.sha256(f"{query}|{top_k}|{filters_str}".encode()).hexdigest()
                 )
                 cached = self.cache.get(cache_key)
                 if cached is not None:
@@ -60,11 +70,23 @@ class _SearchHandler(BaseHTTPRequestHandler):
 
             # Fetch more results if reranking (reranker will trim to top_k)
             fetch_k = top_k * 3 if self.reranker else top_k
-            results = self.vectorstore.search(query=query, top_k=fetch_k, filters=filters)
+            search_start = time.perf_counter()
+            try:
+                results = self.vectorstore.search(query=query, top_k=fetch_k, filters=filters)
+            except VectorStoreError:
+                raise
+            except Exception as e:
+                raise VectorStoreError(f"Vector store search failed: {e}") from e
 
             # Apply reranking
             if self.reranker and results:
                 results = self.reranker.rerank(query=query, results=results, top_k=top_k)
+
+            elapsed_ms = (time.perf_counter() - search_start) * 1000
+
+            # Fire on_search callback
+            if self.callback_manager is not None:
+                self.callback_manager.on_search(query, len(results), elapsed_ms)
 
             # Track accessed sources for the final result
             with self._lock:
@@ -79,8 +101,12 @@ class _SearchHandler(BaseHTTPRequestHandler):
 
             self._send_json(200, response_data)
 
+        except VectorStoreError as e:
+            _logger.error("Search failed: %s", e, exc_info=True)
+            self._send_json(500, {"error": "Search failed"})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            _logger.error("Unexpected search error: %s", e, exc_info=True)
+            self._send_json(500, {"error": "Internal server error"})
 
     def _send_json(self, status: int, data: Any) -> None:
         response = json.dumps(data).encode("utf-8")
@@ -110,10 +136,12 @@ class SearchServer:
         vectorstore: BaseVectorStore,
         reranker: BaseReranker | None = None,
         cache: BaseCache | None = None,
+        callback_manager: CallbackManager | None = None,
     ):
         self.vectorstore = vectorstore
         self.reranker = reranker
         self.cache = cache
+        self.callback_manager = callback_manager
         self.port = self._find_free_port()
         self._accessed_sources: list[Source] = []
         self._lock = threading.Lock()
@@ -122,6 +150,12 @@ class SearchServer:
 
     def start(self) -> None:
         """Start the search server in a background thread."""
+        if self._server is not None:
+            return  # Already running; prevent double-start leak
+
+        # Re-acquire a free port in case the old one was reclaimed after stop().
+        self.port = self._find_free_port()
+
         handler_class = type(
             "_BoundSearchHandler",
             (_SearchHandler,),
@@ -129,6 +163,7 @@ class SearchServer:
                 "vectorstore": self.vectorstore,
                 "reranker": self.reranker,
                 "cache": self.cache,
+                "callback_manager": self.callback_manager,
                 "accessed_sources": self._accessed_sources,
                 "_lock": self._lock,
             },
@@ -148,10 +183,17 @@ class SearchServer:
 
     def get_accessed_sources(self) -> list[Source]:
         """Return all sources that were accessed during search calls."""
+        import hashlib
+
         with self._lock:
             seen: dict[str, Source] = {}
             for source in self._accessed_sources:
-                key = source.id or source.content[:100]
+                # Use ID if available; otherwise hash full content to avoid
+                # collisions from documents sharing the same prefix.
+                if source.id:
+                    key = source.id
+                else:
+                    key = hashlib.sha256(source.content.encode()).hexdigest()
                 if key not in seen or source.score > seen[key].score:
                     seen[key] = source
             return list(seen.values())

@@ -9,14 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-
-class BudgetExceededError(Exception):
-    """Raised when a query exceeds its allocated budget."""
-
-    def __init__(self, reason: str, status: BudgetStatus):
-        self.reason = reason
-        self.status = status
-        super().__init__(f"Budget exceeded: {reason}")
+from deeprecall.core.exceptions import BudgetExceededError  # noqa: F401  # re-export for compat
 
 
 @dataclass
@@ -38,6 +31,20 @@ class QueryBudget:
     max_tokens: int | None = None
     max_time_seconds: float | None = None
     max_cost_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "max_iterations",
+            "max_search_calls",
+            "max_tokens",
+        ):
+            val = getattr(self, field_name)
+            if val is not None and val < 0:
+                raise ValueError(f"{field_name} must be >= 0, got {val}")
+        if self.max_time_seconds is not None and self.max_time_seconds < 0:
+            raise ValueError(f"max_time_seconds must be >= 0, got {self.max_time_seconds}")
+        if self.max_cost_usd is not None and self.max_cost_usd < 0:
+            raise ValueError(f"max_cost_usd must be >= 0, got {self.max_cost_usd}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,19 +84,22 @@ class BudgetStatus:
         self.time_elapsed = time.perf_counter() - start_time
         budget = self.budget
 
-        if budget.max_iterations is not None and self.iterations_used > budget.max_iterations:
+        if budget.max_iterations is not None and self.iterations_used >= budget.max_iterations:
             self._exceed(f"Iterations: {self.iterations_used}/{budget.max_iterations}")
 
-        if budget.max_search_calls is not None and self.search_calls_used > budget.max_search_calls:
+        if (
+            budget.max_search_calls is not None
+            and self.search_calls_used >= budget.max_search_calls
+        ):
             self._exceed(f"Search calls: {self.search_calls_used}/{budget.max_search_calls}")
 
-        if budget.max_tokens is not None and self.tokens_used > budget.max_tokens:
+        if budget.max_tokens is not None and self.tokens_used >= budget.max_tokens:
             self._exceed(f"Tokens: {self.tokens_used}/{budget.max_tokens}")
 
-        if budget.max_time_seconds is not None and self.time_elapsed > budget.max_time_seconds:
+        if budget.max_time_seconds is not None and self.time_elapsed >= budget.max_time_seconds:
             self._exceed(f"Time: {self.time_elapsed:.1f}s/{budget.max_time_seconds}s")
 
-        if budget.max_cost_usd is not None and self.cost_usd > budget.max_cost_usd:
+        if budget.max_cost_usd is not None and self.cost_usd >= budget.max_cost_usd:
             self._exceed(f"Cost: ${self.cost_usd:.4f}/${budget.max_cost_usd}")
 
     def _exceed(self, reason: str) -> None:

@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from deeprecall.core.exceptions import VectorStoreConnectionError, VectorStoreError
 from deeprecall.core.types import SearchResult
 from deeprecall.vectorstores.base import BaseVectorStore
 
@@ -60,28 +61,39 @@ class QdrantStore(BaseVectorStore):
             ) from None
 
         self._models = models
-        self._client = QdrantClient(url=url, api_key=api_key, **kwargs)
-        self._collection_name = collection_name
-        self._dimension = dimension
 
-        # Map string distance to Qdrant enum
-        distance_map = {
-            "Cosine": models.Distance.COSINE,
-            "Euclid": models.Distance.EUCLID,
-            "Dot": models.Distance.DOT,
-        }
-        qdrant_distance = distance_map.get(distance, models.Distance.COSINE)
+        try:
+            self._client = QdrantClient(url=url, api_key=api_key, **kwargs)
+            self._collection_name = collection_name
+            self._dimension = dimension
 
-        # Create collection if it doesn't exist
-        collections = [c.name for c in self._client.get_collections().collections]
-        if collection_name not in collections:
-            self._client.create_collection(
-                collection_name=collection_name,
-                vectors_config=models.VectorParams(
-                    size=dimension,
-                    distance=qdrant_distance,
-                ),
-            )
+            # Map string distance to Qdrant enum
+            distance_map = {
+                "Cosine": models.Distance.COSINE,
+                "Euclid": models.Distance.EUCLID,
+                "Dot": models.Distance.DOT,
+            }
+            if distance not in distance_map:
+                raise ValueError(
+                    f"Invalid distance metric {distance!r}. "
+                    f"Must be one of: {list(distance_map.keys())}"
+                )
+            qdrant_distance = distance_map[distance]
+
+            # Create collection if it doesn't exist
+            collections = [c.name for c in self._client.get_collections().collections]
+            if collection_name not in collections:
+                self._client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=dimension,
+                        distance=qdrant_distance,
+                    ),
+                )
+        except ImportError:
+            raise
+        except Exception as e:
+            raise VectorStoreConnectionError(f"Failed to connect to Qdrant: {e}") from e
 
     def add_documents(
         self,
@@ -117,7 +129,10 @@ class QdrantStore(BaseVectorStore):
                 )
             )
 
-        self._client.upsert(collection_name=self._collection_name, points=points)
+        try:
+            self._client.upsert(collection_name=self._collection_name, points=points)
+        except Exception as e:
+            raise VectorStoreError(f"Qdrant upsert failed: {e}") from e
         return ids
 
     def search(
@@ -151,7 +166,10 @@ class QdrantStore(BaseVectorStore):
             if conditions:
                 search_kwargs["query_filter"] = self._models.Filter(must=conditions)
 
-        results = self._client.search(**search_kwargs)
+        try:
+            results = self._client.search(**search_kwargs)
+        except Exception as e:
+            raise VectorStoreError(f"Qdrant search failed: {e}") from e
 
         search_results: list[SearchResult] = []
         for point in results:
@@ -168,11 +186,32 @@ class QdrantStore(BaseVectorStore):
         return search_results
 
     def delete(self, ids: list[str]) -> None:
-        self._client.delete(
-            collection_name=self._collection_name,
-            points_selector=self._models.PointIdsList(points=ids),
-        )
+        try:
+            # Qdrant accepts UUID strings or integers as point IDs.
+            # Try int conversion for numeric IDs; leave UUID strings as-is.
+            converted: list[str | int] = []
+            for doc_id in ids:
+                try:
+                    converted.append(int(doc_id))
+                except (ValueError, TypeError):
+                    converted.append(doc_id)
+            self._client.delete(
+                collection_name=self._collection_name,
+                points_selector=self._models.PointIdsList(points=converted),
+            )
+        except VectorStoreError:
+            raise
+        except Exception as e:
+            raise VectorStoreError(f"Qdrant delete failed: {e}") from e
 
     def count(self) -> int:
-        info = self._client.get_collection(self._collection_name)
-        return info.points_count or 0
+        try:
+            info = self._client.get_collection(self._collection_name)
+            return info.points_count or 0
+        except Exception as e:
+            raise VectorStoreError(f"Qdrant count failed: {e}") from e
+
+    def close(self) -> None:
+        """Close the Qdrant client connection."""
+        if hasattr(self._client, "close"):
+            self._client.close()

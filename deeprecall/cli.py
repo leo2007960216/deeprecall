@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from deeprecall.core.engine import DeepRecallEngine
+    from deeprecall.vectorstores.base import BaseVectorStore
 from dotenv import load_dotenv
 
 load_dotenv()
 
+_VS_CHOICES = ["chroma", "milvus", "qdrant", "pinecone", "faiss"]
+
 
 @click.group()
-@click.version_option(version="0.2.0", prog_name="deeprecall")
+@click.version_option(version=None, prog_name="deeprecall", package_name="deeprecall")
 def main() -> None:
     """DeepRecall -- Recursive reasoning over your data."""
 
@@ -20,7 +27,7 @@ def main() -> None:
 @main.command()
 @click.option(
     "--vectorstore",
-    type=click.Choice(["chroma", "milvus", "qdrant", "pinecone"]),
+    type=click.Choice(_VS_CHOICES),
     default="chroma",
     help="Vector store backend.",
 )
@@ -72,7 +79,7 @@ def serve(
 @click.argument("query_text")
 @click.option(
     "--vectorstore",
-    type=click.Choice(["chroma", "milvus", "qdrant", "pinecone"]),
+    type=click.Choice(_VS_CHOICES),
     default="chroma",
     help="Vector store backend.",
 )
@@ -128,17 +135,21 @@ def query(
 @click.option("--path", required=True, type=click.Path(exists=True), help="Path to documents.")
 @click.option(
     "--vectorstore",
-    type=click.Choice(["chroma", "milvus", "qdrant", "pinecone"]),
+    type=click.Choice(_VS_CHOICES),
     default="chroma",
     help="Vector store backend.",
 )
 @click.option("--collection", default="deeprecall", help="Collection/index name.")
-@click.option("--persist-dir", default="./chroma_db", help="Persist directory (ChromaDB only).")
+@click.option(
+    "--persist-dir",
+    default=None,
+    help="Persist directory (default: ./chroma_db for ChromaDB, ./faiss_index for FAISS).",
+)
 def ingest(
     path: str,
     vectorstore: str,
     collection: str,
-    persist_dir: str,
+    persist_dir: str | None,
 ) -> None:
     """Ingest documents from a file or directory into the vector store."""
     store = _build_vectorstore(vectorstore, collection, persist_dir)
@@ -155,9 +166,24 @@ def ingest(
             if f.endswith((".txt", ".md", ".py", ".json", ".csv"))
         ]
 
+    max_file_size = 50 * 1024 * 1024  # 50 MB per file
     for filepath in files:
-        with open(filepath, encoding="utf-8") as f:
-            content = f.read()
+        try:
+            fsize = os.path.getsize(filepath)
+        except OSError as e:
+            click.echo(f"Warning: skipping {filepath}: {e}")
+            continue
+        if fsize > max_file_size:
+            click.echo(
+                f"Warning: skipping {filepath} ({fsize} bytes exceeds {max_file_size} limit)"
+            )
+            continue
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            click.echo(f"Warning: skipping {filepath} (not valid UTF-8)")
+            continue
         documents.append(content)
         metadatas.append({"source": filepath, "filename": os.path.basename(filepath)})
 
@@ -173,17 +199,17 @@ def ingest(
 @main.command()
 @click.option(
     "--vectorstore",
-    type=click.Choice(["chroma", "milvus", "qdrant", "pinecone"]),
+    type=click.Choice(_VS_CHOICES),
     default="chroma",
     help="Vector store backend.",
 )
 @click.option("--collection", default="deeprecall", help="Collection/index name.")
-@click.option("--persist-dir", default="./chroma_db", help="Persist directory (ChromaDB only).")
+@click.option("--persist-dir", default=None, help="Persist directory.")
 @click.argument("doc_ids", nargs=-1, required=True)
 def delete(
     vectorstore: str,
     collection: str,
-    persist_dir: str,
+    persist_dir: str | None,
     doc_ids: tuple[str, ...],
 ) -> None:
     """Delete documents by ID from the vector store."""
@@ -239,8 +265,170 @@ max_size = 1000
     click.echo(f"Created config file: {path}")
 
 
-def _build_vectorstore(vectorstore: str, collection: str, persist_dir: str | None = None) -> object:
+@main.command()
+def status() -> None:
+    """Show DeepRecall environment status."""
+    import platform
+
+    from deeprecall import __version__
+
+    click.echo(f"Python:       {platform.python_version()}")
+    click.echo(f"DeepRecall:   {__version__}")
+
+    # RLM version
+    try:
+        from importlib.metadata import version as _v
+
+        click.echo(f"RLM (rlms):   {_v('rlms')}")
+    except Exception:
+        click.echo("RLM (rlms):   not installed")
+
+    # Check optional extras
+    _extras = {
+        "chromadb": "chroma",
+        "pymilvus": "milvus",
+        "qdrant-client": "qdrant",
+        "pinecone": "pinecone",
+        "faiss-cpu": "faiss",
+        "redis": "redis",
+        "opentelemetry-api": "otel",
+        "fastapi": "server",
+        "rich": "rich",
+        "cohere": "rerank-cohere",
+        "sentence-transformers": "rerank-cross-encoder",
+    }
+    installed = []
+    for pkg, extra in _extras.items():
+        try:
+            from importlib.metadata import version as _v
+
+            _v(pkg)
+            installed.append(extra)
+        except Exception:
+            pass
+    click.echo(f"Extras:       {', '.join(installed) if installed else 'none'}")
+
+
+@main.command()
+@click.option(
+    "--queries", required=True, type=click.Path(exists=True), help="Path to queries JSON file."
+)
+@click.option("--output", default="benchmark_results.json", help="Output file for results.")
+@click.option(
+    "--vectorstore",
+    type=click.Choice(_VS_CHOICES),
+    default="chroma",
+    help="Vector store backend.",
+)
+@click.option("--collection", default="deeprecall", help="Collection/index name.")
+@click.option("--persist-dir", default=None, help="Persist directory.")
+@click.option("--backend", default="openai", help="LLM backend.")
+@click.option("--model", default="gpt-4o-mini", help="LLM model name.")
+def benchmark(
+    queries: str,
+    output: str,
+    vectorstore: str,
+    collection: str,
+    persist_dir: str | None,
+    backend: str,
+    model: str,
+) -> None:
+    """Run benchmark queries and collect metrics."""
+    import json
+    import time
+
+    # Validate file size to prevent resource exhaustion
+    try:
+        file_size = os.path.getsize(queries)
+    except OSError as e:
+        click.echo(f"Error: cannot read queries file: {e}")
+        sys.exit(1)
+
+    max_size = 10 * 1024 * 1024  # 10 MB
+    if file_size > max_size:
+        click.echo(f"Error: queries file too large ({file_size} bytes, max {max_size}).")
+        sys.exit(1)
+
+    try:
+        with open(queries, encoding="utf-8") as f:
+            query_list = json.load(f)
+    except json.JSONDecodeError as e:
+        click.echo(f"Error: invalid JSON in queries file: {e}")
+        sys.exit(1)
+
+    if not isinstance(query_list, list):
+        click.echo("Error: queries file must contain a JSON array of strings.")
+        sys.exit(1)
+
+    engine = _build_engine(vectorstore, collection, persist_dir, backend, model)
+
+    results = []
+    total_start = time.perf_counter()
+
+    for i, q in enumerate(query_list):
+        q_text = q if isinstance(q, str) else q.get("query", "")
+        click.echo(f"[{i + 1}/{len(query_list)}] {q_text[:80]}...")
+
+        start = time.perf_counter()
+        try:
+            result = engine.query(q_text)
+            elapsed = time.perf_counter() - start
+            results.append(
+                {
+                    "query": q_text,
+                    "answer_length": len(result.answer),
+                    "sources": len(result.sources),
+                    "steps": len(result.reasoning_trace),
+                    "tokens": result.usage.total_input_tokens + result.usage.total_output_tokens,
+                    "time_seconds": round(elapsed, 3),
+                    "confidence": result.confidence,
+                    "error": result.error,
+                }
+            )
+        except Exception as e:
+            elapsed = time.perf_counter() - start
+            results.append(
+                {
+                    "query": q_text,
+                    "error": str(e),
+                    "time_seconds": round(elapsed, 3),
+                }
+            )
+
+    total_time = time.perf_counter() - total_start
+
+    report = {
+        "total_queries": len(results),
+        "total_time_seconds": round(total_time, 3),
+        "avg_time_seconds": round(total_time / len(results), 3) if results else 0,
+        "results": results,
+    }
+
+    with open(output, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+    click.echo(f"\nBenchmark complete: {len(results)} queries in {total_time:.1f}s")
+    click.echo(f"Results written to: {output}")
+
+
+def _default_persist_dir(vectorstore: str, persist_dir: str | None) -> str | None:
+    """Return a sensible default persist directory when the user didn't specify one."""
+    if persist_dir is not None:
+        return persist_dir
+    if vectorstore == "faiss":
+        return "./faiss_index"
+    if vectorstore == "chroma":
+        return "./chroma_db"
+    return None
+
+
+def _build_vectorstore(
+    vectorstore: str,
+    collection: str,
+    persist_dir: str | None = None,
+) -> BaseVectorStore:
     """Build a vector store from CLI args."""
+    persist_dir = _default_persist_dir(vectorstore, persist_dir)
     if vectorstore == "chroma":
         from deeprecall.vectorstores.chroma import ChromaStore
 
@@ -257,8 +445,22 @@ def _build_vectorstore(vectorstore: str, collection: str, persist_dir: str | Non
         from deeprecall.vectorstores.pinecone import PineconeStore
 
         return PineconeStore(index_name=collection)
+    elif vectorstore == "faiss":
+        from deeprecall.vectorstores.faiss import FAISSStore
+
+        return FAISSStore(persist_path=persist_dir)
     else:
         raise ValueError(f"Unknown vectorstore: {vectorstore}")
+
+
+_BACKEND_API_KEY_ENVS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "azure_openai": "AZURE_OPENAI_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "portkey": "PORTKEY_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
 
 def _build_engine(
@@ -268,16 +470,18 @@ def _build_engine(
     backend: str = "openai",
     model: str = "gpt-4o-mini",
     verbose: bool = False,
-) -> object:
+) -> DeepRecallEngine:
     from deeprecall.core.engine import DeepRecallEngine
 
+    env_var = _BACKEND_API_KEY_ENVS.get(backend, f"{backend.upper()}_API_KEY")
+    api_key = os.getenv(env_var)
     store = _build_vectorstore(vectorstore, collection, persist_dir)
     return DeepRecallEngine(
         vectorstore=store,
         backend=backend,
         backend_kwargs={
             "model_name": model,
-            "api_key": os.getenv("OPENAI_API_KEY"),
+            "api_key": api_key,
         },
         verbose=verbose,
     )

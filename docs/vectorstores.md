@@ -1,6 +1,6 @@
 # Vector Stores
 
-DeepRecall supports four vector database backends. Install only what you need.
+DeepRecall supports five vector database backends. Install only what you need.
 
 ## ChromaDB
 
@@ -83,6 +83,31 @@ store = PineconeStore(
     embedding_fn=your_embedding_function,
 )
 ```
+
+## FAISS
+
+Local ML-native vector index. Best for research and teams already using FAISS.
+
+```bash
+pip install deeprecall[faiss]
+```
+
+```python
+from deeprecall.vectorstores import FAISSStore
+
+store = FAISSStore(
+    dimension=384,
+    embedding_fn=your_embedding_function,
+)
+store.add_documents(["Hello world"])
+results = store.search("greeting")
+
+# Persistence
+store.save("./my_index")
+store = FAISSStore.load("./my_index", embedding_fn=your_embedding_function)
+```
+
+FAISS supports L2 (default) and inner-product (`index_type="flat_ip"`) metrics.
 
 ## Custom Vector Store
 

@@ -12,9 +12,14 @@ from typing import Any
 
 try:
     from llama_index.core.query_engine import CustomQueryEngine
-    from llama_index.core.response.schema import Response
     from llama_index.core.retrievers import BaseRetriever
     from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+
+    # Response moved in llama-index-core >= 0.10
+    try:
+        from llama_index.core.base.response.schema import Response
+    except ImportError:
+        from llama_index.core.response.schema import Response  # type: ignore[no-redef]
 except ImportError:
     raise ImportError(
         "llama-index-core is required for LlamaIndex adapters. "

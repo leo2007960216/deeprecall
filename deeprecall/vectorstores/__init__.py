@@ -5,12 +5,21 @@ Supported stores:
     - MilvusStore: Milvus (scalable, production-ready)
     - QdrantStore: Qdrant (fast, Rust-based)
     - PineconeStore: Pinecone (managed cloud service)
+    - FAISSStore: FAISS (local, ML-native, requires embedding_fn)
 """
 
 from deeprecall.core.types import SearchResult
 from deeprecall.vectorstores.base import BaseVectorStore
 
-__all__ = ["BaseVectorStore", "SearchResult"]
+__all__ = [
+    "BaseVectorStore",
+    "ChromaStore",
+    "FAISSStore",
+    "MilvusStore",
+    "PineconeStore",
+    "QdrantStore",
+    "SearchResult",
+]
 
 
 def _lazy_import(name: str):
@@ -31,8 +40,16 @@ def _lazy_import(name: str):
         from deeprecall.vectorstores.pinecone import PineconeStore
 
         return PineconeStore
+    if name == "FAISSStore":
+        from deeprecall.vectorstores.faiss import FAISSStore
+
+        return FAISSStore
     raise AttributeError(f"module 'deeprecall.vectorstores' has no attribute {name!r}")
 
 
 def __getattr__(name: str):
     return _lazy_import(name)
+
+
+def __dir__() -> list[str]:
+    return __all__

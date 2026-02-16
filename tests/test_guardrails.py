@@ -38,6 +38,39 @@ class TestQueryBudget:
         assert d["max_search_calls"] == 10
         assert d["max_iterations"] is None
 
+    # -- __post_init__ validation --
+
+    def test_negative_max_iterations_raises(self):
+        with pytest.raises(ValueError, match="max_iterations must be >= 0"):
+            QueryBudget(max_iterations=-1)
+
+    def test_negative_max_search_calls_raises(self):
+        with pytest.raises(ValueError, match="max_search_calls must be >= 0"):
+            QueryBudget(max_search_calls=-5)
+
+    def test_negative_max_tokens_raises(self):
+        with pytest.raises(ValueError, match="max_tokens must be >= 0"):
+            QueryBudget(max_tokens=-100)
+
+    def test_negative_max_time_raises(self):
+        with pytest.raises(ValueError, match="max_time_seconds must be >= 0"):
+            QueryBudget(max_time_seconds=-1.0)
+
+    def test_negative_max_cost_raises(self):
+        with pytest.raises(ValueError, match="max_cost_usd must be >= 0"):
+            QueryBudget(max_cost_usd=-0.01)
+
+    def test_zero_values_allowed(self):
+        budget = QueryBudget(
+            max_iterations=0,
+            max_search_calls=0,
+            max_tokens=0,
+            max_time_seconds=0.0,
+            max_cost_usd=0.0,
+        )
+        assert budget.max_iterations == 0
+        assert budget.max_cost_usd == 0.0
+
 
 class TestBudgetStatus:
     def test_default_status(self):

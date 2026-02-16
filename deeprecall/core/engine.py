@@ -1,17 +1,20 @@
-"""DeepRecall Engine -- the core recursive reasoning engine.
-
-Bridges RLM (Recursive Language Models) with vector databases to enable
-recursive, multi-hop retrieval and reasoning.
-"""
+"""DeepRecall Engine -- core recursive reasoning engine."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import threading
 import time
 from typing import Any
 
 from deeprecall.core.config import DeepRecallConfig
-from deeprecall.core.guardrails import BudgetExceededError, QueryBudget
+from deeprecall.core.exceptions import (
+    BudgetExceededError,
+    LLMProviderError,
+    SearchServerError,
+)
+from deeprecall.core.guardrails import QueryBudget
 from deeprecall.core.search_server import SearchServer
 from deeprecall.core.tracer import DeepRecallTracer
 from deeprecall.core.types import DeepRecallResult, Source, UsageInfo
@@ -30,20 +33,6 @@ class DeepRecallEngine:
     Args:
         vectorstore: A vector store adapter instance (ChromaStore, MilvusStore, etc.).
         config: Engine configuration. Uses defaults if not provided.
-
-    Example:
-        ```python
-        from deeprecall import DeepRecall
-        from deeprecall.vectorstores import ChromaStore
-
-        store = ChromaStore(collection_name="my_docs")
-        store.add_documents(["Document 1 text...", "Document 2 text..."])
-
-        engine = DeepRecall(vectorstore=store, backend="openai",
-                            backend_kwargs={"model_name": "gpt-4o-mini"})
-        result = engine.query("What are the main themes?")
-        print(result.answer)
-        ```
     """
 
     def __init__(
@@ -74,7 +63,9 @@ class DeepRecallEngine:
             config_kwargs.update(kwargs)
             self.config = DeepRecallConfig(**config_kwargs)
 
-        self._callback_manager = None
+        self._callback_manager: Any = None
+        self._search_server: SearchServer | None = None
+        self._batch_lock = threading.Lock()
         self._setup_callbacks()
         self._validate_setup()
 
@@ -84,11 +75,17 @@ class DeepRecallEngine:
             raise ValueError("A vectorstore is required. Pass a BaseVectorStore instance.")
 
     def _setup_callbacks(self) -> None:
-        """Initialize callback manager from config."""
-        if self.config.callbacks:
+        """Initialize callback manager; auto-creates JSONLCallback for log_dir."""
+        callbacks = list(self.config.callbacks) if self.config.callbacks else []
+        if self.config.log_dir:
+            from deeprecall.core.callbacks import JSONLCallback
+
+            if not any(isinstance(c, JSONLCallback) for c in callbacks):
+                callbacks.append(JSONLCallback(log_dir=self.config.log_dir))
+        if callbacks:
             from deeprecall.core.callbacks import CallbackManager
 
-            self._callback_manager = CallbackManager(self.config.callbacks)
+            self._callback_manager = CallbackManager(callbacks)
 
     def query(
         self,
@@ -119,8 +116,8 @@ class DeepRecallEngine:
             ) from None
 
         time_start = time.perf_counter()
-        effective_top_k = top_k or self.config.top_k
-        effective_budget = budget or self.config.budget
+        effective_top_k = top_k if top_k is not None else self.config.top_k
+        effective_budget = budget if budget is not None else self.config.budget
 
         # Check query cache
         cache_key: str | None = None
@@ -128,7 +125,11 @@ class DeepRecallEngine:
             cache_key = self._build_cache_key(query, effective_top_k)
             cached = self.config.cache.get(cache_key)
             if cached is not None:
-                return cached
+                if isinstance(cached, DeepRecallResult):
+                    return cached
+                # Persistent caches (Disk/Redis) deserialise to dict
+                if isinstance(cached, dict):
+                    return DeepRecallResult.from_dict(cached)
 
         # Fire on_query_start callback
         if self._callback_manager:
@@ -137,13 +138,29 @@ class DeepRecallEngine:
         if self.config.verbose:
             self._print_query_panel(query, effective_budget)
 
-        # Start the search server (with reranker if configured)
-        search_server = SearchServer(
-            self.vectorstore,
-            reranker=self.config.reranker,
-            cache=self.config.cache,
-        )
-        search_server.start()
+        # Start or reuse the search server
+        owns_server = False
+        if self.config.reuse_search_server and self._search_server is not None:
+            search_server = self._search_server
+            search_server.reset_sources()
+        else:
+            search_server = SearchServer(
+                self.vectorstore,
+                reranker=self.config.reranker,
+                cache=self.config.cache,
+                callback_manager=self._callback_manager,
+            )
+            try:
+                search_server.start()
+            except SearchServerError:
+                raise
+            except Exception as e:
+                raise SearchServerError(f"Failed to start search server: {e}") from e
+
+            if self.config.reuse_search_server:
+                self._search_server = search_server
+            else:
+                owns_server = True
 
         # Create tracer for this query
         tracer = DeepRecallTracer(
@@ -180,9 +197,25 @@ class DeepRecallEngine:
                 verbose=self.config.verbose,
             )
 
-            # Run recursive completion
+            # Run recursive completion (with retry if configured)
             root = root_prompt or query
-            rlm_result = rlm.completion(prompt=context, root_prompt=root)
+
+            def _run_completion() -> Any:
+                try:
+                    return rlm.completion(prompt=context, root_prompt=root)
+                except BudgetExceededError:
+                    raise
+                except LLMProviderError:
+                    raise
+                except Exception as e:
+                    raise LLMProviderError(f"LLM completion failed: {e}") from e
+
+            if self.config.retry is not None:
+                from deeprecall.core.retry import retry_with_backoff
+
+                rlm_result = retry_with_backoff(_run_completion, self.config.retry)
+            else:
+                rlm_result = _run_completion()
 
             # Build final result
             result = self._build_result(
@@ -224,39 +257,41 @@ class DeepRecallEngine:
             raise
 
         finally:
-            search_server.stop()
+            if owns_server:
+                search_server.stop()
 
     def _print_query_panel(self, query: str, budget: QueryBudget | None) -> None:
-        """Print verbose query panel using rich (lazy import)."""
+        """Print verbose query panel using rich (best-effort, never raises)."""
         try:
             from rich.console import Console
             from rich.panel import Panel
 
-            budget_info = ""
+            limits: list[str] = []
             if budget:
-                limits = []
-                if budget.max_search_calls is not None:
-                    limits.append(f"searches\u2264{budget.max_search_calls}")
-                if budget.max_tokens is not None:
-                    limits.append(f"tokens\u2264{budget.max_tokens}")
+                for attr, label in [("max_search_calls", "searches"), ("max_tokens", "tokens")]:
+                    val = getattr(budget, attr, None)
+                    if val is not None:
+                        limits.append(f"{label}\u2264{val}")
                 if budget.max_time_seconds is not None:
                     limits.append(f"time\u2264{budget.max_time_seconds}s")
-                budget_info = f"\n[bold]Budget:[/bold] {', '.join(limits)}" if limits else ""
-
+            budget_info = f"\n[bold]Budget:[/bold] {', '.join(limits)}" if limits else ""
+            try:
+                doc_count: int | str = self.vectorstore.count()
+            except Exception:
+                doc_count = "?"
+            vs = type(self.vectorstore).__name__
+            model = self.config.backend_kwargs.get("model_name", "unknown")
             Console().print(
                 Panel(
                     f"[bold]Query:[/bold] {query}\n"
-                    f"[bold]Vector Store:[/bold] {type(self.vectorstore).__name__} "
-                    f"({self.vectorstore.count()} docs)\n"
-                    f"[bold]Backend:[/bold] {self.config.backend} / "
-                    f"{self.config.backend_kwargs.get('model_name', 'unknown')}"
-                    f"{budget_info}",
+                    f"[bold]Store:[/bold] {vs} ({doc_count} docs)\n"
+                    f"[bold]Backend:[/bold] {self.config.backend} / {model}{budget_info}",
                     title="[bold blue]DeepRecall[/bold blue]",
                     border_style="blue",
                 )
             )
         except Exception:
-            pass  # verbose panel is non-critical
+            pass
 
     def _build_result(
         self,
@@ -306,9 +341,86 @@ class DeepRecallEngine:
         scores = [s.score for s in sources if s.score > 0]
         if not scores:
             return None
-        # Average of top-3 source scores, normalized to 0-1
+        # Average of top-3 source scores, clamped to [0.0, 1.0]
         top_scores = sorted(scores, reverse=True)[:3]
-        return round(sum(top_scores) / len(top_scores), 4)
+        raw = sum(top_scores) / len(top_scores)
+        return round(min(max(raw, 0.0), 1.0), 4)
+
+    def query_batch(
+        self,
+        queries: list[str],
+        *,
+        max_concurrency: int = 4,
+        root_prompt: str | None = None,
+        top_k: int | None = None,
+        budget: QueryBudget | None = None,
+    ) -> list[DeepRecallResult]:
+        """Execute multiple queries concurrently using a thread pool.
+
+        Returns a list of DeepRecallResult in the same order as *queries*.
+
+        Raises:
+            ValueError: If the batch exceeds 10 000 queries or max_concurrency < 1.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if len(queries) > 10_000:
+            raise ValueError(
+                f"Batch size {len(queries)} exceeds maximum of 10,000. Split into smaller batches."
+            )
+        if max_concurrency < 1:
+            raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
+
+        results: list[DeepRecallResult | None] = [None] * len(queries)
+
+        def _run(index: int, q: str) -> tuple[int, DeepRecallResult]:
+            result = self.query(q, root_prompt=root_prompt, top_k=top_k, budget=budget)
+            return index, result
+
+        # Hold the lock for the full batch lifetime so overlapping batch calls
+        # don't corrupt the config.
+        with self._batch_lock:
+            saved_reuse = self.config.reuse_search_server
+            self.config.reuse_search_server = False
+            try:
+                with ThreadPoolExecutor(max_workers=max_concurrency) as pool:
+                    futures = {pool.submit(_run, i, q): i for i, q in enumerate(queries)}
+                    for future in as_completed(futures):
+                        try:
+                            idx, res = future.result()
+                            results[idx] = res
+                        except Exception as e:
+                            idx = futures[future]
+                            results[idx] = DeepRecallResult(
+                                answer="",
+                                sources=[],
+                                reasoning_trace=[],
+                                usage=UsageInfo(),
+                                execution_time=0.0,
+                                query=queries[idx],
+                                budget_status={},
+                                error=str(e),
+                                confidence=None,
+                            )
+            finally:
+                self.config.reuse_search_server = saved_reuse
+
+        # Ensure no None slots remain (shouldn't happen, but be safe)
+        for i, r in enumerate(results):
+            if r is None:
+                results[i] = DeepRecallResult(
+                    answer="",
+                    sources=[],
+                    reasoning_trace=[],
+                    usage=UsageInfo(),
+                    execution_time=0.0,
+                    query=queries[i],
+                    budget_status={},
+                    error="Query failed: no result produced",
+                    confidence=None,
+                )
+
+        return results  # type: ignore[return-value]
 
     def add_documents(
         self,
@@ -356,31 +468,32 @@ class DeepRecallEngine:
         return usage
 
     def _build_cache_key(self, query: str, top_k: int) -> str:
-        """Build a cache key for a query."""
-        import hashlib
-
+        """Build a deterministic cache key (backend + model + top_k + query)."""
         key_data = (
             f"{query}|{self.config.backend}|"
             f"{self.config.backend_kwargs.get('model_name', '')}|"
-            f"{top_k}|{self.vectorstore.count()}"
+            f"{top_k}"
         )
         return hashlib.sha256(key_data.encode()).hexdigest()
 
     def close(self) -> None:
-        """Clean up resources (cache, callbacks)."""
+        """Clean up resources (search server, cache, callbacks)."""
+        if self._search_server is not None:
+            self._search_server.stop()
+            self._search_server = None
         if self.config.cache:
             logger.debug("Engine closed; cache retained with %s", self.config.cache.stats())
 
     def __enter__(self) -> DeepRecallEngine:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
-        return False
 
     def __repr__(self) -> str:
+        # Avoid calling vectorstore.count() -- it may trigger a network call,
+        # which violates the Python __repr__ contract (must be side-effect free).
         return (
             f"DeepRecall(vectorstore={type(self.vectorstore).__name__}, "
-            f"backend={self.config.backend!r}, "
-            f"docs={self.vectorstore.count()})"
+            f"backend={self.config.backend!r})"
         )

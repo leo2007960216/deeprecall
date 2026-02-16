@@ -28,7 +28,7 @@ config = DeepRecallConfig(
 )
 ```
 
-Events logged: `query_start`, `reasoning_step`, `query_end`, `error`, `budget_warning`.
+Events logged: `query_start`, `reasoning_step`, `search`, `sub_llm_call`, `progress`, `query_end`, `error`, `budget_warning`.
 
 ### UsageTrackingCallback
 
@@ -70,6 +70,8 @@ class SlackAlertCallback(BaseCallback):
 | `on_query_start(query, config)` | Query begins |
 | `on_reasoning_step(step, budget_status)` | After each RLM iteration |
 | `on_search(query, num_results, time_ms)` | After each vector store search |
+| `on_sub_llm_call(prompt, response, time_ms)` | After each `llm_query()` sub-call |
+| `on_progress(event, data)` | Generic progress events |
 | `on_query_end(result)` | Query completes |
 | `on_error(error)` | Unrecoverable error |
 | `on_budget_warning(status)` | Budget limit exceeded |

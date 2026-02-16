@@ -3,8 +3,8 @@ name = "deeprecall"
 authors = [
     {name = "Pavan Kumar Kotha", email = "54451831+kothapavan1998@users.noreply.github.com"},
 ]
-version = "0.2.1"
-description = "Recursive reasoning engine for AI agents and vector databases, powered by RLM."
+version = "0.3.0"
+description = "Recursive reasoning engine for vector databases, powered by RLM."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -16,8 +16,28 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
-keywords = ["rlm", "rag", "recursive", "vector-database", "langchain", "llamaindex", "ai-agents"]
+keywords = [
+    "rlm",
+    "rag",
+    "recursive",
+    "recursive-reasoning",
+    "retrieval-augmented-generation",
+    "vector-database",
+    "vector-search",
+    "embeddings",
+    "langchain",
+    "llamaindex",
+    "llm",
+    "multi-hop",
+    "deep-retrieval",
+    "chromadb",
+    "pinecone",
+    "qdrant",
+    "milvus",
+    "faiss",
+]
 
 dependencies = [
     "rlms>=0.1.0",
@@ -28,6 +48,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/kothapavan1998/deeprecall"
 Repository = "https://github.com/kothapavan1998/deeprecall"
+Documentation = "https://github.com/kothapavan1998/deeprecall/tree/main/docs"
+Changelog = "https://github.com/kothapavan1998/deeprecall/blob/main/CHANGELOG.md"
 Issues = "https://github.com/kothapavan1998/deeprecall/issues"
 
 [project.optional-dependencies]
@@ -35,6 +57,7 @@ milvus = ["pymilvus>=2.5.0"]
 chroma = ["chromadb>=1.0.0"]
 qdrant = ["qdrant-client>=1.12.0"]
 pinecone = ["pinecone>=5.0.0"]
+faiss = ["faiss-cpu>=1.7.0"]
 langchain = ["langchain-core>=0.3.0"]
 llamaindex = ["llama-index-core>=0.12.0"]
 server = ["fastapi>=0.115.0", "uvicorn>=0.34.0"]
@@ -49,7 +72,7 @@ otel = [
     "opentelemetry-exporter-otlp>=1.20.0",
 ]
 all = [
-    "deeprecall[openai,rich,milvus,chroma,qdrant,pinecone,langchain,llamaindex,server,rerank-cohere,rerank-cross-encoder,redis,otel]",
+    "deeprecall[openai,rich,milvus,chroma,qdrant,pinecone,faiss,langchain,llamaindex,server,rerank-cohere,rerank-cross-encoder,redis,otel]",
 ]
 
 [project.scripts]
@@ -62,6 +85,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["deeprecall", "deeprecall.*"]
 
+[tool.setuptools.package-data]
+deeprecall = ["py.typed"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",
@@ -71,6 +97,8 @@ test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.27.0",
 ]
 
 [tool.ruff]
@@ -95,3 +123,4 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "strict"

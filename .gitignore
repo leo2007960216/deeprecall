@@ -38,5 +38,9 @@ Thumbs.db
 # Docs
 site/
 
-# ChromaDB local storage
+# Local vector store storage
 chroma_db/
+faiss_index/
+
+# Type checking
+.mypy_cache/

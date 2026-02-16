@@ -5,7 +5,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Setup
 
 ```bash
-git clone https://github.com/kothapavan/deeprecall.git
+git clone https://github.com/kothapavan1998/deeprecall.git
 cd deeprecall
 pip install -e ".[all,dev,test]"
 ```
@@ -59,10 +59,11 @@ make check
 
 ## Roadmap
 
-- [ ] More vector stores (Weaviate, pgvector, FAISS)
-- [ ] Async support for the engine
-- [ ] Streaming responses in the engine
-- [ ] Richer reasoning trace extraction
-- [ ] Benchmarks against standard RAG
-- [ ] Multi-modal document support
+- [x] ~~FAISS vector store~~ (shipped in v0.3.0)
+- [x] ~~Async engine support~~ (shipped in v0.2.0)
+- [x] ~~Richer reasoning trace extraction~~ (shipped in v0.2.0)
+- [ ] More vector stores (Weaviate, pgvector)
+- [ ] True token-level streaming (blocked on upstream RLM library support; currently the server runs the full query then chunks the answer into SSE events)
+- [ ] Benchmarks against standard RAG pipelines
+- [ ] Multi-modal document support (images, PDFs)
 - [ ] Custom embedding function registry

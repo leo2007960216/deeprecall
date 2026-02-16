@@ -24,7 +24,12 @@ except ImportError:
         "Install it with: pip install deeprecall[server]"
     ) from None
 
+import logging
+
+from deeprecall import __version__
 from deeprecall.core.engine import DeepRecallEngine
+
+_logger = logging.getLogger(__name__)
 
 # --- Request/Response Models ---
 
@@ -106,7 +111,7 @@ def create_app(
     app = FastAPI(
         title="DeepRecall API",
         description="OpenAI-compatible API powered by DeepRecall recursive reasoning.",
-        version="0.2.0",
+        version=__version__,
     )
 
     # Add middleware (order matters: auth first, then rate limit)
@@ -135,25 +140,34 @@ def create_app(
         if not request.messages:
             raise HTTPException(status_code=400, detail="Messages cannot be empty.")
 
-        # Extract system message as additional context
-        system_context = ""
+        # Build context from the full conversation (multi-turn support).
+        # System messages become instructions, prior user/assistant turns
+        # become conversation history, and the last user message is the query.
+        system_parts: list[str] = []
+        history_parts: list[str] = []
+        query = ""
+
         for msg in request.messages:
             if msg.role == "system":
-                system_context += msg.content + "\n"
-
-        # Extract the last user message as the query
-        query = ""
-        for msg in reversed(request.messages):
-            if msg.role == "user":
+                system_parts.append(msg.content)
+            elif msg.role == "user":
+                if query:
+                    history_parts.append(f"User: {query}")
                 query = msg.content
-                break
+            elif msg.role == "assistant":
+                history_parts.append(f"Assistant: {msg.content}")
 
         if not query:
             raise HTTPException(status_code=400, detail="No user message found.")
 
-        # Prepend system context to query if present
-        if system_context:
-            query = f"[System instructions: {system_context.strip()}]\n\n{query}"
+        # Prepend system context and conversation history to query
+        prefix_parts: list[str] = []
+        if system_parts:
+            prefix_parts.append(f"[System instructions: {' '.join(system_parts)}]")
+        if history_parts:
+            prefix_parts.append("[Conversation history:\n" + "\n".join(history_parts) + "]")
+        if prefix_parts:
+            query = "\n\n".join(prefix_parts) + "\n\n" + query
 
         if request.stream:
             return StreamingResponse(
@@ -161,7 +175,11 @@ def create_app(
                 media_type="text/event-stream",
             )
 
-        result = await asyncio.to_thread(engine.query, query)
+        try:
+            result = await asyncio.to_thread(engine.query, query)
+        except Exception as e:
+            _logger.error("Chat completion failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error") from None
 
         return ChatCompletionResponse(
             model=request.model,
@@ -197,8 +215,9 @@ def create_app(
         """Return usage statistics if a UsageTrackingCallback is registered."""
         from deeprecall.core.callbacks import UsageTrackingCallback
 
-        if engine._callback_manager:
-            for cb in engine._callback_manager.callbacks:
+        cb_manager = getattr(engine, "_callback_manager", None)
+        if cb_manager:
+            for cb in cb_manager.callbacks:
                 if isinstance(cb, UsageTrackingCallback):
                     return {"status": "ok", "usage": cb.summary()}
         return {"status": "ok", "usage": None, "message": "No usage tracker configured"}
@@ -207,7 +226,11 @@ def create_app(
     async def clear_cache() -> dict[str, str]:
         """Clear the query and search cache."""
         if engine.config.cache:
-            await asyncio.to_thread(engine.config.cache.clear)
+            try:
+                await asyncio.to_thread(engine.config.cache.clear)
+            except Exception as e:
+                _logger.error("Cache clear failed: %s", e, exc_info=True)
+                raise HTTPException(status_code=500, detail="Cache clear failed") from None
             return {"status": "ok", "message": "Cache cleared"}
         return {"status": "ok", "message": "No cache configured"}
 
@@ -219,12 +242,27 @@ async def _stream_response(
     query: str,
     model: str,
 ) -> Any:
-    """Stream a DeepRecall response in OpenAI SSE format."""
+    """Stream a DeepRecall response in OpenAI SSE format.
+
+    .. warning::
+        This is *simulated* streaming. The full query runs to completion first,
+        then the answer is sliced into chunks for SSE delivery. True token-level
+        streaming requires upstream RLM support and is planned for v0.5.0.
+    """
     import asyncio
     import json
 
     # Run query in thread to not block
-    result = await asyncio.to_thread(engine.query, query)
+    try:
+        result = await asyncio.to_thread(engine.query, query)
+    except Exception as e:
+        _logger.error("Streaming query failed: %s", e, exc_info=True)
+        error_data = {
+            "error": {"message": "Internal server error", "type": "server_error"},
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     # Stream the answer in chunks
     chunk_size = 50
@@ -233,6 +271,10 @@ async def _stream_response(
 
     for i in range(0, len(answer), chunk_size):
         chunk = answer[i : i + chunk_size]
+        delta: dict[str, str] = {"content": chunk}
+        # OpenAI spec requires role: assistant on the first chunk
+        if i == 0:
+            delta["role"] = "assistant"
         data = {
             "id": response_id,
             "object": "chat.completion.chunk",
@@ -241,7 +283,7 @@ async def _stream_response(
             "choices": [
                 {
                     "index": 0,
-                    "delta": {"content": chunk},
+                    "delta": delta,
                     "finish_reason": None,
                 }
             ],
