@@ -50,6 +50,13 @@ class DeepRecallConfig:
         cache: Cache backend for query and search result caching.
         cache_ttl: Time-to-live for cached results in seconds.
         reranker: Post-retrieval reranker for improving search quality.
+        max_timeout: RLM wall-clock timeout in seconds. None = unlimited.
+        max_errors: Max consecutive REPL errors before RLM aborts. None = unlimited.
+        max_tokens: RLM total token limit (input + output). None = unlimited.
+        compaction: Enable RLM context compaction (summarise history when nearing
+            context window limit). Off by default.
+        compaction_threshold_pct: Fraction of context window that triggers compaction
+            (0.0, 1.0]. Only used when compaction is True. Matches RLM's parameter name.
     """
 
     backend: BackendType = "openai"
@@ -70,6 +77,11 @@ class DeepRecallConfig:
     reranker: BaseReranker | None = None
     retry: RetryConfig | None = None
     reuse_search_server: bool = True
+    max_timeout: float | None = None
+    max_tokens: int | None = None
+    max_errors: int | None = None
+    compaction: bool = False
+    compaction_threshold_pct: float = 0.85
 
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
@@ -80,6 +92,16 @@ class DeepRecallConfig:
             raise ValueError(f"top_k must be >= 0, got {self.top_k}")
         if self.cache_ttl < 0:
             raise ValueError(f"cache_ttl must be >= 0, got {self.cache_ttl}")
+        if self.max_timeout is not None and self.max_timeout <= 0:
+            raise ValueError(f"max_timeout must be > 0, got {self.max_timeout}")
+        if self.max_tokens is not None and self.max_tokens < 1:
+            raise ValueError(f"max_tokens must be >= 1, got {self.max_tokens}")
+        if self.max_errors is not None and self.max_errors < 1:
+            raise ValueError(f"max_errors must be >= 1, got {self.max_errors}")
+        if not (0.0 < self.compaction_threshold_pct <= 1.0):
+            raise ValueError(
+                f"compaction_threshold_pct must be in (0.0, 1.0], got {self.compaction_threshold_pct}"
+            )
 
     @staticmethod
     def _strip_secrets(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -119,4 +141,9 @@ class DeepRecallConfig:
                 else None
             ),
             "reuse_search_server": self.reuse_search_server,
+            "max_timeout": self.max_timeout,
+            "max_tokens": self.max_tokens,
+            "max_errors": self.max_errors,
+            "compaction": self.compaction,
+            "compaction_threshold_pct": self.compaction_threshold_pct,
         }

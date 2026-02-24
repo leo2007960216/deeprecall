@@ -23,7 +23,9 @@ class QueryBudget:
         max_search_calls: Max vector DB search calls allowed.
         max_tokens: Total token budget (input + output combined).
         max_time_seconds: Wall-clock time limit for the query.
-        max_cost_usd: Dollar cost limit (reserved for future use -- requires pricing info).
+        max_cost_usd: Dollar cost limit in USD. Enforced both at the RLM level
+            (via max_budget) and the tracer level. Requires OpenRouter backend
+            for automatic cost extraction.
     """
 
     max_iterations: int | None = None

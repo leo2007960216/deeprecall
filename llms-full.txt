@@ -71,7 +71,14 @@ config = DeepRecallConfig(
     cache=InMemoryCache(...),    # BaseCache | None
     reranker=CohereReranker(..), # BaseReranker | None
     retry=RetryConfig(...),      # RetryConfig | None
+    environment="local",         # str: REPL sandbox type ("local", "docker", "modal", ...)
     reuse_search_server=True,    # bool: keep server alive across queries
+    cache_ttl=3600,              # int: TTL for cached results in seconds
+    max_timeout=None,            # float | None: wall-clock timeout (seconds) (v0.4+)
+    max_errors=None,             # int | None: max consecutive REPL errors (v0.4+)
+    max_tokens=None,             # int | None: total token limit (input + output) (v0.4+)
+    compaction=False,            # bool: enable context compaction (v0.4+)
+    compaction_threshold_pct=0.85, # float: context window % before compaction (v0.4+)
 )
 engine = DeepRecall(vectorstore=store, config=config)
 ```
@@ -88,6 +95,7 @@ result = engine.query(
         max_search_calls=10,
         max_tokens=50000,
         max_time_seconds=30.0,
+        max_cost_usd=0.50,   # USD cost limit (v0.4+, requires OpenRouter)
     ),
 )
 
@@ -111,7 +119,7 @@ engine.close()
 result.answer              # str
 result.sources             # list[Source] -- .content, .metadata, .score, .id
 result.reasoning_trace     # list[ReasoningStep] -- .iteration, .action, .code, .output, .searches
-result.usage               # UsageInfo -- .total_input_tokens, .total_output_tokens, .total_calls
+result.usage               # UsageInfo -- .total_input_tokens, .total_output_tokens, .total_calls, .total_cost_usd
 result.execution_time      # float (seconds)
 result.query               # str
 result.budget_status       # dict | None
@@ -196,7 +204,8 @@ config = DeepRecallConfig(callbacks=[
 ])
 ```
 
-Hooks: `on_query_start`, `on_reasoning_step`, `on_search`, `on_sub_llm_call`,
+Hooks: `on_query_start`, `on_iteration_start` (v0.4+), `on_reasoning_step`,
+`on_iteration_complete` (v0.4+), `on_search`, `on_sub_llm_call`,
 `on_progress`, `on_query_end`, `on_error`, `on_budget_warning`.
 
 ## Reranking

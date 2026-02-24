@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-02-24
+
+### Added
+
+- **RLM v0.1.1a support** -- Upgraded dependency to `rlms>=0.1.1,<0.2.0` (pinned upper bound for safety).
+- **Cost tracking** -- `UsageInfo` now includes `total_cost_usd` and per-model `cost_usd` in the breakdown. Costs are extracted automatically when using OpenRouter.
+- **Compaction support** -- New `compaction` and `compaction_threshold_pct` config params. When enabled, RLM summarises conversation history when approaching the context window limit, allowing longer reasoning chains.
+- **Execution limit params** -- New `max_timeout` (wall-clock seconds), `max_errors` (consecutive REPL error cap), and `max_tokens` (total token limit) config fields, passed through to RLM.
+- **Native cost budget enforcement** -- `QueryBudget.max_cost_usd` is now enforced at the RLM level via its `max_budget` parameter, in addition to the existing tracer-level check.
+- **Iteration lifecycle callbacks** -- `on_iteration_start(iteration)` and `on_iteration_complete(iteration, has_final_answer)` hooks on `BaseCallback`, `CallbackManager`, `JSONLCallback`, and `ProgressCallback`.
+- **Full RLMLogger protocol** -- `DeepRecallTracer` now implements `clear_iterations()` and `get_trajectory()`, matching the updated RLM v0.1.1 logger interface.
+- **Graceful RLM exception handling** -- `TimeoutExceededError`, `TokenLimitExceededError`, `ErrorThresholdExceededError`, `BudgetExceededError`, and `CancellationError` from RLM are now caught and converted to partial `DeepRecallResult` objects with the `partial_answer` preserved, instead of propagating as unhandled errors.
+- **Live integration test suite** -- 16 new tests validating v0.4 features against real Redis on Docker and real dataclass round-trips.
+
+### Changed
+
+- **`FINAL_VAR` prompt updated** -- System prompt now documents that `FINAL_VAR` accepts both variable names and direct values (upstream RLM v0.1.1a feature).
+- **`history` variable documented** -- System prompt lists the `history` REPL variable available when compaction is enabled.
+- **`max_cost_usd` is now active** -- `QueryBudget.max_cost_usd` docstring updated from "reserved for future use" to active, reflecting real cost extraction from OpenRouter.
+- **`rlms` dependency pinned** -- Upper bound `<0.2.0` added to prevent silent breakage from future RLM major releases.
+
+### Fixed
+
+- **`compaction_threshold` parameter name mismatch** -- DeepRecall was passing `compaction_threshold` to RLM, but RLM's constructor expects `compaction_threshold_pct`. This caused a `TypeError` whenever compaction was enabled. Renamed everywhere.
+- **System prompt format incompatibility** -- RLM v0.1.1a calls `.format(custom_tools_section=...)` on custom system prompts. Literal curly braces in code examples (e.g., `{len(results)}`) were interpreted as format placeholders, causing `KeyError`. All literal braces are now escaped and the `{custom_tools_section}` placeholder is included.
+- **Redis integration test port** -- Updated from hardcoded 6380 to 6379 to match standard Docker Redis setup.
+
 ## [0.3.0] - 2026-02-15
 
 ### Added

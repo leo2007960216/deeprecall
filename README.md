@@ -61,6 +61,79 @@ with DeepRecall(
 
 > **Tip**: Always use `with` or call `engine.close()` when done to release background resources. Vector stores with persistent connections (Milvus, Qdrant) also support `with store:` for automatic cleanup.
 
+## What's New in v0.4
+
+### RLM v0.1.1a Support
+
+DeepRecall now requires `rlms>=0.1.1,<0.2.0`, unlocking depth>1 recursive subcalls, context compaction, cost tracking, and scaffold protection from the upstream RLM library. RLM-level limit exceptions (`TimeoutExceededError`, `TokenLimitExceededError`, `ErrorThresholdExceededError`) are now caught gracefully with partial answer recovery.
+
+### Cost Tracking
+
+Real USD cost is now extracted automatically when using OpenRouter. Every result includes cost data in `result.usage.total_cost_usd` and per-model breakdown.
+
+```python
+result = engine.query("question")
+print(f"Cost: ${result.usage.total_cost_usd}")         # e.g. $0.0045
+print(result.usage.model_breakdown)                      # per-model cost_usd
+print(f"Budget spent: ${result.budget_status['cost_usd']}")
+```
+
+### Cost Budget Enforcement
+
+`max_cost_usd` is now actively enforced -- both at the RLM level (stops the reasoning loop) and at the tracer level. Previously this was reserved for future use.
+
+```python
+result = engine.query(
+    "Complex question?",
+    budget=QueryBudget(max_cost_usd=0.10),  # Hard USD cap
+)
+```
+
+### Context Compaction
+
+For queries that require many reasoning steps, enable compaction to avoid hitting the model's context window limit. When enabled, RLM automatically summarises the conversation history when token usage nears the threshold.
+
+```python
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    compaction=True,                  # Enable context summarisation
+    compaction_threshold_pct=0.85,    # Trigger at 85% of context window
+)
+```
+
+### Execution Limits
+
+New `max_timeout`, `max_errors`, and `max_tokens` config params give fine-grained control over RLM execution.
+
+```python
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    max_timeout=120.0,   # Kill after 2 minutes wall-clock
+    max_errors=5,        # Abort after 5 consecutive REPL errors
+    max_tokens=50000,    # Total token limit (input + output)
+)
+```
+
+### Iteration Lifecycle Callbacks
+
+New `on_iteration_start` and `on_iteration_complete` hooks fire before/after each RLM reasoning iteration, giving more granular observability than the existing `on_reasoning_step`.
+
+```python
+from deeprecall.core.callbacks import BaseCallback
+
+class MyCallback(BaseCallback):
+    def on_iteration_start(self, iteration):
+        print(f"Starting iteration {iteration}...")
+
+    def on_iteration_complete(self, iteration, has_final_answer):
+        if has_final_answer:
+            print(f"Got final answer at iteration {iteration}")
+```
+
+---
+
 ## What's New in v0.3
 
 ### Exception Handling
@@ -366,7 +439,7 @@ tests/
 ├── test_batch.py         # Batch query tests
 ├── test_deprecations.py  # Deprecation utility tests
 ├── test_concurrency.py   # Thread safety & race condition tests
-└── ...                   # 361 tests total (358 unit + 3 e2e)
+└── ...                   # 439 tests total (unit + integration + e2e)
 ```
 
 ## Contributing

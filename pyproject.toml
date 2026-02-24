@@ -3,7 +3,7 @@ name = "deeprecall"
 authors = [
     {name = "Pavan Kumar Kotha", email = "54451831+kothapavan1998@users.noreply.github.com"},
 ]
-version = "0.3.0"
+version = "0.4.0"
 description = "Recursive reasoning engine for vector databases, powered by RLM."
 readme = "README.md"
 license = "MIT"
@@ -40,7 +40,7 @@ keywords = [
 ]
 
 dependencies = [
-    "rlms>=0.1.0",
+    "rlms>=0.1.1,<0.2.0",
     "python-dotenv>=1.2.1",
     "click>=8.0.0",
 ]

@@ -54,6 +54,9 @@ class DeepRecallTracer:
         """
         step_num = len(self.steps) + 1
 
+        if self.callback_manager:
+            self.callback_manager.on_iteration_start(step_num)
+
         # Extract data from code blocks
         code_parts: list[str] = []
         output_parts: list[str] = []
@@ -98,15 +101,30 @@ class DeepRecallTracer:
         self.budget_status.iterations_used = step_num
         self.budget_status.search_calls_used += len(search_calls)
 
-        # Fire callback
+        # Fire callbacks
         if self.callback_manager:
             self.callback_manager.on_reasoning_step(step, self.budget_status)
+            has_final = getattr(iteration, "final_answer", None) is not None
+            self.callback_manager.on_iteration_complete(step_num, has_final)
 
         # Check budget limits (may raise BudgetExceededError)
         self.budget_status.check(self.start_time)
 
     def log_metadata(self, metadata: Any) -> None:
         """Accept metadata calls from RLM (no-op for our use case)."""
+
+    def clear_iterations(self) -> None:
+        """Called by RLM at the start of each completion to reset state."""
+        self.steps.clear()
+        self.budget_status.iterations_used = 0
+        self.budget_status.search_calls_used = 0
+
+    def get_trajectory(self) -> dict[str, Any]:
+        """Called by RLM after completion to retrieve the full trajectory."""
+        return {
+            "iterations": [s.to_dict() for s in self.steps],
+            "budget_status": self.budget_status.to_dict(),
+        }
 
     def _extract_search_calls(self, code: str, stdout: str | None) -> list[dict[str, Any]]:
         """Parse search_db() calls from code to track queries."""

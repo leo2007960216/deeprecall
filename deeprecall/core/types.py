@@ -77,20 +77,24 @@ class ReasoningStep:
 
 @dataclass
 class UsageInfo:
-    """Token usage information."""
+    """Token usage and cost information."""
 
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_calls: int = 0
-    model_breakdown: dict[str, dict[str, int]] = field(default_factory=dict)
+    total_cost_usd: float | None = None
+    model_breakdown: dict[str, dict[str, int | float | None]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
             "total_calls": self.total_calls,
             "model_breakdown": self.model_breakdown,
         }
+        if self.total_cost_usd is not None:
+            result["total_cost_usd"] = self.total_cost_usd
+        return result
 
 
 @dataclass
@@ -149,6 +153,7 @@ class DeepRecallResult:
             total_input_tokens=raw_usage.get("total_input_tokens", 0),
             total_output_tokens=raw_usage.get("total_output_tokens", 0),
             total_calls=raw_usage.get("total_calls", 0),
+            total_cost_usd=raw_usage.get("total_cost_usd"),
             model_breakdown=raw_usage.get("model_breakdown", {}),
         )
         return cls(

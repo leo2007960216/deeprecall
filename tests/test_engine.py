@@ -208,7 +208,7 @@ class TestDeepRecallEngine:
 
     def test_query_batch_too_large_raises(self, mock_vectorstore):
         engine = DeepRecallEngine(vectorstore=mock_vectorstore)
-        with pytest.raises(ValueError, match="exceeds maximum"):
+        with pytest.raises(ValueError, match="exceeds 10,000"):
             engine.query_batch(["q"] * 10_001)
 
     def test_query_batch_zero_concurrency_raises(self, mock_vectorstore):

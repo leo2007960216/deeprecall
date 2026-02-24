@@ -116,7 +116,9 @@ def mock_rlm_result() -> MagicMock:
             total_input_tokens=100,
             total_output_tokens=50,
             total_calls=3,
+            total_cost=0.0023,
         )
     }
     result.execution_time = 1.5
+    result.metadata = None
     return result

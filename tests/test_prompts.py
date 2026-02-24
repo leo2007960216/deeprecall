@@ -27,6 +27,17 @@ class TestSystemPrompt:
     def test_prompt_mentions_llm_query(self):
         assert "llm_query" in DEEPRECALL_SYSTEM_PROMPT
 
+    def test_prompt_format_compatible_with_rlm(self):
+        """RLM v0.1.1a calls .format(custom_tools_section=...) on the prompt."""
+        result = DEEPRECALL_SYSTEM_PROMPT.format(custom_tools_section="")
+        assert "search_db" in result
+        assert "{custom_tools_section}" not in result
+
+    def test_prompt_format_injects_tools(self):
+        tools = "\n8. my_custom_tool() - does something"
+        result = DEEPRECALL_SYSTEM_PROMPT.format(custom_tools_section=tools)
+        assert "my_custom_tool()" in result
+
 
 class TestBuildSearchSetupCode:
     """Tests for the build_search_setup_code function."""

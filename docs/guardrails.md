@@ -12,11 +12,52 @@ budget = QueryBudget(
     max_search_calls=20,      # Max vector DB searches
     max_tokens=50000,         # Total token budget (input + output)
     max_time_seconds=60.0,    # Wall-clock timeout
-    max_cost_usd=0.50,        # Dollar cost limit
+    max_cost_usd=0.50,        # Dollar cost limit (USD)
 )
 ```
 
 Set any field to `None` (default) to disable that limit.
+
+### Cost Budget (v0.4+)
+
+`max_cost_usd` is now actively enforced. When set, it is passed to RLM as `max_budget` which stops the reasoning loop when the cost limit is reached. Cost data is automatically extracted when using the OpenRouter backend. The cost is also tracked at the tracer level and reported in `result.budget_status["cost_usd"]`.
+
+```python
+result = engine.query(
+    "Expensive multi-hop question?",
+    budget=QueryBudget(max_cost_usd=0.10),
+)
+print(f"Total cost: ${result.usage.total_cost_usd}")
+```
+
+### Execution Limits (v0.4+)
+
+In addition to per-query budgets, you can set execution limits on the engine config:
+
+```python
+from deeprecall import DeepRecallConfig
+
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    max_timeout=120.0,   # Wall-clock timeout in seconds
+    max_errors=5,        # Max consecutive REPL errors before abort
+    max_tokens=50000,    # Total token limit (input + output)
+)
+```
+
+### Compaction (v0.4+)
+
+For very long reasoning chains, enable compaction to prevent hitting the model's context window:
+
+```python
+config = DeepRecallConfig(
+    backend="openai",
+    backend_kwargs={"model_name": "gpt-4o-mini"},
+    compaction=True,               # Summarise history when nearing context limit
+    compaction_threshold_pct=0.85,  # Trigger at 85% of context window (default)
+)
+```
 
 ## Usage
 

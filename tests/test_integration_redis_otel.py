@@ -2,11 +2,11 @@
 """Live integration tests for RedisCache and OpenTelemetryCallback.
 
 Requires:
-  - Redis running on localhost:6380
+  - Redis running on localhost:6379 (or set REDIS_PORT env var)
   - Jaeger OTLP collector running on localhost:4317
 
 Run:
-  docker run -d --name deeprecall-redis -p 6380:6379 redis:7-alpine
+  docker run -d --name deeprecall-redis -p 6379:6379 redis:7-alpine
   docker run -d --name deeprecall-jaeger -p 16686:16686 -p 4317:4317 -e COLLECTOR_OTLP_ENABLED=true jaegertracing/all-in-one:latest
   python tests/test_integration_redis_otel.py
 """
@@ -20,13 +20,13 @@ import time
 def test_redis_cache():
     """Full integration test against a real Redis instance."""
     print("\n" + "=" * 60)
-    print("TEST: RedisCache against real Redis (localhost:6380)")
+    print("TEST: RedisCache against real Redis (localhost:6379)")
     print("=" * 60)
 
     from deeprecall.core.cache_redis import RedisCache
 
     # 1. Connect
-    cache = RedisCache(url="redis://localhost:6380/0", prefix="test_deeprecall:", default_ttl=60)
+    cache = RedisCache(url="redis://localhost:6379/0", prefix="test_deeprecall:", default_ttl=60)
     print("[PASS] Connected to Redis")
 
     # 2. Health check
@@ -105,7 +105,7 @@ def test_redis_cache():
     print("[PASS] Serializes objects with to_dict() method")
 
     # 12. Namespace isolation
-    cache2 = RedisCache(url="redis://localhost:6380/0", prefix="other_app:", default_ttl=60)
+    cache2 = RedisCache(url="redis://localhost:6379/0", prefix="other_app:", default_ttl=60)
     cache2.set("key1", "from_other_app")
     # Original cache should NOT see other_app's key
     assert cache.get("key1") == {"answer": "hello world", "score": 0.95}  # our original

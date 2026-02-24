@@ -21,6 +21,9 @@ The REPL environment is initialized with:
 relevant documents. Each result is a dict with: "content", "metadata", "score", "id".
 5. A `SHOW_VARS()` function that returns all variables you have created.
 6. The ability to use `print()` statements to view REPL output.
+7. A `history` variable that accumulates summaries of prior reasoning steps (available when \
+compaction is enabled).
+{custom_tools_section}
 
 IMPORTANT -- RECOMMENDED STRATEGY:
 - First, use `search_db()` to find relevant documents for the query or sub-questions.
@@ -32,9 +35,9 @@ Example -- searching and reasoning over results:
 ```repl
 # Search for relevant documents
 results = search_db("key topic from the query", top_k=10)
-print(f"Found {len(results)} results")
+print(f"Found {{len(results)}} results")
 for r in results[:3]:
-    print(f"Score: {r['score']:.3f} | {r['content'][:200]}...")
+    print(f"Score: {{r['score']:.3f}} | {{r['content'][:200]}}...")
 ```
 
 Example -- multi-hop reasoning with search:
@@ -46,9 +49,9 @@ docs_text = "\\n---\\n".join([r["content"] for r in broad_results])
 # Use an LLM to identify sub-questions
 sub_questions = llm_query(
     f"Given these documents, what specific sub-questions should I investigate "
-    f"to fully answer: '{query}'?\\n\\nDocuments:\\n{docs_text}"
+    f"to fully answer: '{{query}}'?\\n\\nDocuments:\\n{{docs_text}}"
 )
-print(f"Sub-questions to investigate: {sub_questions}")
+print(f"Sub-questions to investigate: {{sub_questions}}")
 ```
 
 Example -- refining search and synthesizing:
@@ -58,13 +61,13 @@ all_evidence = []
 for sq in sub_question_list:
     sq_results = search_db(sq, top_k=3)
     evidence = "\\n".join([r["content"] for r in sq_results])
-    summary = llm_query(f"Summarize relevant evidence for: {sq}\\n\\nEvidence:\\n{evidence}")
-    all_evidence.append(f"Q: {sq}\\nA: {summary}")
-    print(f"Evidence for '{sq}': {summary[:200]}...")
+    summary = llm_query(f"Summarize relevant evidence for: {{sq}}\\n\\nEvidence:\\n{{evidence}}")
+    all_evidence.append(f"Q: {{sq}}\\nA: {{summary}}")
+    print(f"Evidence for '{{sq}}': {{summary[:200]}}...")
 
 # Synthesize final answer
 final_answer = llm_query(
-    f"Based on all gathered evidence, provide a comprehensive answer to: {query}"
+    f"Based on all gathered evidence, provide a comprehensive answer to: {{query}}"
     f"\\n\\nEvidence:\\n" + "\\n---\\n".join(all_evidence)
 )
 print(final_answer)
@@ -73,9 +76,10 @@ print(final_answer)
 IMPORTANT: When done, provide your final answer using:
 1. FINAL(your final answer here) -- to provide the answer directly
 2. FINAL_VAR(variable_name) -- to return an existing REPL variable as your answer
+   FINAL_VAR also accepts a direct value: FINAL_VAR(result) where result is a computed expression.
 
-WARNING: FINAL_VAR retrieves an EXISTING variable. Create it in a ```repl``` block FIRST, then \
-call FINAL_VAR in a SEPARATE step.
+WARNING: When using FINAL_VAR with a variable name, the variable must EXIST. Create it in a \
+```repl``` block FIRST, then call FINAL_VAR in a SEPARATE step.
 
 Think step by step, plan, and execute immediately -- don't just say what you will do. Use \
 `search_db()` and sub-LLMs aggressively. Remember to answer the original query in your final answer.

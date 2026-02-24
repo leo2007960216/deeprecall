@@ -52,6 +52,12 @@ class BaseCallback:  # noqa: B024
     def on_progress(self, message: str, percent: float | None = None) -> None:  # noqa: B027
         """Called to report progress updates."""
 
+    def on_iteration_start(self, iteration: int) -> None:  # noqa: B027
+        """Called before each RLM reasoning iteration begins."""
+
+    def on_iteration_complete(self, iteration: int, has_final_answer: bool) -> None:  # noqa: B027
+        """Called after each RLM reasoning iteration completes."""
+
 
 class CallbackManager:
     """Manages and dispatches events to multiple callbacks."""
@@ -104,6 +110,14 @@ class CallbackManager:
     def on_progress(self, message: str, percent: float | None = None) -> None:
         for cb in self.callbacks:
             self._safe_call(cb, "on_progress", message, percent)
+
+    def on_iteration_start(self, iteration: int) -> None:
+        for cb in self.callbacks:
+            self._safe_call(cb, "on_iteration_start", iteration)
+
+    def on_iteration_complete(self, iteration: int, has_final_answer: bool) -> None:
+        for cb in self.callbacks:
+            self._safe_call(cb, "on_iteration_complete", iteration, has_final_answer)
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +240,15 @@ class JSONLCallback(BaseCallback):
     def on_progress(self, message: str, percent: float | None = None) -> None:
         self._write("progress", {"message": message, "percent": percent})
 
+    def on_iteration_start(self, iteration: int) -> None:
+        self._write("iteration_start", {"iteration": iteration})
+
+    def on_iteration_complete(self, iteration: int, has_final_answer: bool) -> None:
+        self._write(
+            "iteration_complete",
+            {"iteration": iteration, "has_final_answer": has_final_answer},
+        )
+
 
 class UsageTrackingCallback(BaseCallback):
     """Tracks cumulative usage across multiple queries for billing.
@@ -303,3 +326,12 @@ class ProgressCallback(BaseCallback):
 
     def on_progress(self, message: str, percent: float | None = None) -> None:
         self._record("progress", {"message": message, "percent": percent})
+
+    def on_iteration_start(self, iteration: int) -> None:
+        self._record("iteration_start", {"iteration": iteration})
+
+    def on_iteration_complete(self, iteration: int, has_final_answer: bool) -> None:
+        self._record(
+            "iteration_complete",
+            {"iteration": iteration, "has_final_answer": has_final_answer},
+        )

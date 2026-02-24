@@ -23,17 +23,32 @@ from deeprecall.vectorstores.base import BaseVectorStore
 
 logger = logging.getLogger(__name__)
 
+try:
+    from rlm.utils.exceptions import (
+        BudgetExceededError as RLMBudgetExceededError,
+    )
+    from rlm.utils.exceptions import (
+        CancellationError as RLMCancellationError,
+    )
+    from rlm.utils.exceptions import (
+        ErrorThresholdExceededError,
+        TimeoutExceededError,
+        TokenLimitExceededError,
+    )
+
+    _RLM_LIMIT_ERRORS: tuple[type[Exception], ...] = (
+        RLMBudgetExceededError,
+        TimeoutExceededError,
+        TokenLimitExceededError,
+        ErrorThresholdExceededError,
+        RLMCancellationError,
+    )
+except ImportError:
+    _RLM_LIMIT_ERRORS = ()
+
 
 class DeepRecallEngine:
-    """Recursive reasoning engine powered by RLM and vector databases.
-
-    Combines RLM's recursive decomposition with vector DB retrieval to
-    enable multi-hop reasoning over large document collections.
-
-    Args:
-        vectorstore: A vector store adapter instance (ChromaStore, MilvusStore, etc.).
-        config: Engine configuration. Uses defaults if not provided.
-    """
+    """Recursive reasoning engine powered by RLM and vector databases."""
 
     def __init__(
         self,
@@ -47,19 +62,16 @@ class DeepRecallEngine:
         **kwargs: Any,
     ):
         self.vectorstore = vectorstore
-
-        # Allow either config object or individual kwargs
         if config is not None:
             self.config = config
         else:
-            config_kwargs: dict[str, Any] = {}
+            config_kwargs: dict[str, Any] = {"verbose": verbose}
             if backend is not None:
                 config_kwargs["backend"] = backend
             if backend_kwargs is not None:
                 config_kwargs["backend_kwargs"] = backend_kwargs
             if max_iterations is not None:
                 config_kwargs["max_iterations"] = max_iterations
-            config_kwargs["verbose"] = verbose
             config_kwargs.update(kwargs)
             self.config = DeepRecallConfig(**config_kwargs)
 
@@ -67,10 +79,6 @@ class DeepRecallEngine:
         self._search_server: SearchServer | None = None
         self._batch_lock = threading.Lock()
         self._setup_callbacks()
-        self._validate_setup()
-
-    def _validate_setup(self) -> None:
-        """Validate that the engine is properly configured."""
         if self.vectorstore is None:
             raise ValueError("A vectorstore is required. Pass a BaseVectorStore instance.")
 
@@ -94,17 +102,7 @@ class DeepRecallEngine:
         top_k: int | None = None,
         budget: QueryBudget | None = None,
     ) -> DeepRecallResult:
-        """Execute a recursive reasoning query over the vector database.
-
-        Args:
-            query: The question or task to answer.
-            root_prompt: Optional short prompt visible to the root LM.
-            top_k: Override the default top_k for this query.
-            budget: Per-query budget override. Falls back to config.budget.
-
-        Returns:
-            DeepRecallResult with answer, sources, reasoning trace, and usage info.
-        """
+        """Execute a recursive reasoning query over the vector database."""
         if not query or not query.strip():
             raise ValueError("Query must be a non-empty string.")
 
@@ -182,6 +180,20 @@ class DeepRecallEngine:
             # Build context
             context = self._build_context(query, effective_top_k)
 
+            # Build optional RLM v0.1.1a kwargs
+            rlm_kwargs: dict[str, Any] = {}
+            if effective_budget and effective_budget.max_cost_usd is not None:
+                rlm_kwargs["max_budget"] = effective_budget.max_cost_usd
+            if self.config.max_timeout is not None:
+                rlm_kwargs["max_timeout"] = self.config.max_timeout
+            if self.config.max_tokens is not None:
+                rlm_kwargs["max_tokens"] = self.config.max_tokens
+            if self.config.max_errors is not None:
+                rlm_kwargs["max_errors"] = self.config.max_errors
+            if self.config.compaction:
+                rlm_kwargs["compaction"] = True
+                rlm_kwargs["compaction_threshold_pct"] = self.config.compaction_threshold_pct
+
             # Create and run the RLM with our tracer as the logger
             rlm = RLM(
                 backend=self.config.backend,
@@ -195,6 +207,7 @@ class DeepRecallEngine:
                 other_backend_kwargs=self.config.other_backend_kwargs,
                 logger=tracer,
                 verbose=self.config.verbose,
+                **rlm_kwargs,
             )
 
             # Run recursive completion (with retry if configured)
@@ -206,6 +219,8 @@ class DeepRecallEngine:
                 except BudgetExceededError:
                     raise
                 except LLMProviderError:
+                    raise
+                except _RLM_LIMIT_ERRORS:
                     raise
                 except Exception as e:
                     raise LLMProviderError(f"LLM completion failed: {e}") from e
@@ -237,7 +252,7 @@ class DeepRecallEngine:
             return result
 
         except BudgetExceededError as e:
-            # Return partial result when budget exceeded
+            # DeepRecall's own budget exceeded (from tracer guardrails)
             result = self._build_result(
                 rlm_result=None,
                 search_server=search_server,
@@ -248,6 +263,22 @@ class DeepRecallEngine:
             )
             if self._callback_manager:
                 self._callback_manager.on_budget_warning(e.status)
+                self._callback_manager.on_query_end(result)
+            return result
+
+        except _RLM_LIMIT_ERRORS as e:
+            # RLM-level limit exceeded (timeout, tokens, budget, errors, cancellation).
+            result = self._build_result(
+                rlm_result=None,
+                search_server=search_server,
+                tracer=tracer,
+                query=query,
+                time_start=time_start,
+                error=str(e),
+                rlm_partial_answer=getattr(e, "partial_answer", None),
+            )
+            if self._callback_manager:
+                self._callback_manager.on_error(e)
                 self._callback_manager.on_query_end(result)
             return result
 
@@ -269,22 +300,19 @@ class DeepRecallEngine:
             limits: list[str] = []
             if budget:
                 for attr, label in [("max_search_calls", "searches"), ("max_tokens", "tokens")]:
-                    val = getattr(budget, attr, None)
-                    if val is not None:
+                    if (val := getattr(budget, attr, None)) is not None:
                         limits.append(f"{label}\u2264{val}")
                 if budget.max_time_seconds is not None:
                     limits.append(f"time\u2264{budget.max_time_seconds}s")
             budget_info = f"\n[bold]Budget:[/bold] {', '.join(limits)}" if limits else ""
-            try:
-                doc_count: int | str = self.vectorstore.count()
-            except Exception:
-                doc_count = "?"
+            doc_count: int | str = (
+                self.vectorstore.count() if hasattr(self.vectorstore, "count") else "?"
+            )
             vs = type(self.vectorstore).__name__
             model = self.config.backend_kwargs.get("model_name", "unknown")
             Console().print(
                 Panel(
-                    f"[bold]Query:[/bold] {query}\n"
-                    f"[bold]Store:[/bold] {vs} ({doc_count} docs)\n"
+                    f"[bold]Query:[/bold] {query}\n[bold]Store:[/bold] {vs} ({doc_count} docs)\n"
                     f"[bold]Backend:[/bold] {self.config.backend} / {model}{budget_info}",
                     title="[bold blue]DeepRecall[/bold blue]",
                     border_style="blue",
@@ -301,26 +329,28 @@ class DeepRecallEngine:
         query: str,
         time_start: float,
         error: str | None = None,
+        rlm_partial_answer: str | None = None,
     ) -> DeepRecallResult:
         """Build a DeepRecallResult from RLM output and tracer data."""
         execution_time = time.perf_counter() - time_start
         sources = search_server.get_accessed_sources()
         usage = self._extract_usage(rlm_result) if rlm_result else UsageInfo()
 
-        # Update tracer budget with token info
         tracer.budget_status.tokens_used = usage.total_input_tokens + usage.total_output_tokens
+        if usage.total_cost_usd is not None:
+            tracer.budget_status.cost_usd = usage.total_cost_usd
 
-        # Calculate confidence from source scores
         confidence = self._compute_confidence(sources)
 
-        # Get answer (partial from trace if budget exceeded)
         if rlm_result:
             answer = rlm_result.response
+        elif rlm_partial_answer:
+            answer = f"[Partial] {rlm_partial_answer}"
         elif tracer.steps:
             last_output = tracer.steps[-1].output or ""
             answer = f"[Partial - budget exceeded] {last_output[:500]}"
         else:
-            answer = "[No answer - budget exceeded before first iteration]"
+            answer = "[No answer - execution limit reached]"
 
         return DeepRecallResult(
             answer=answer,
@@ -346,6 +376,20 @@ class DeepRecallEngine:
         raw = sum(top_scores) / len(top_scores)
         return round(min(max(raw, 0.0), 1.0), 4)
 
+    @staticmethod
+    def _error_result(q: str, error: str) -> DeepRecallResult:
+        return DeepRecallResult(
+            answer="",
+            sources=[],
+            reasoning_trace=[],
+            usage=UsageInfo(),
+            execution_time=0.0,
+            query=q,
+            budget_status={},
+            error=error,
+            confidence=None,
+        )
+
     def query_batch(
         self,
         queries: list[str],
@@ -358,15 +402,12 @@ class DeepRecallEngine:
         """Execute multiple queries concurrently using a thread pool.
 
         Returns a list of DeepRecallResult in the same order as *queries*.
-
-        Raises:
-            ValueError: If the batch exceeds 10 000 queries or max_concurrency < 1.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         if len(queries) > 10_000:
             raise ValueError(
-                f"Batch size {len(queries)} exceeds maximum of 10,000. Split into smaller batches."
+                f"Batch size {len(queries)} exceeds 10,000. Split into smaller batches."
             )
         if max_concurrency < 1:
             raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
@@ -374,11 +415,8 @@ class DeepRecallEngine:
         results: list[DeepRecallResult | None] = [None] * len(queries)
 
         def _run(index: int, q: str) -> tuple[int, DeepRecallResult]:
-            result = self.query(q, root_prompt=root_prompt, top_k=top_k, budget=budget)
-            return index, result
+            return index, self.query(q, root_prompt=root_prompt, top_k=top_k, budget=budget)
 
-        # Hold the lock for the full batch lifetime so overlapping batch calls
-        # don't corrupt the config.
         with self._batch_lock:
             saved_reuse = self.config.reuse_search_server
             self.config.reuse_search_server = False
@@ -391,34 +429,13 @@ class DeepRecallEngine:
                             results[idx] = res
                         except Exception as e:
                             idx = futures[future]
-                            results[idx] = DeepRecallResult(
-                                answer="",
-                                sources=[],
-                                reasoning_trace=[],
-                                usage=UsageInfo(),
-                                execution_time=0.0,
-                                query=queries[idx],
-                                budget_status={},
-                                error=str(e),
-                                confidence=None,
-                            )
+                            results[idx] = self._error_result(queries[idx], str(e))
             finally:
                 self.config.reuse_search_server = saved_reuse
 
-        # Ensure no None slots remain (shouldn't happen, but be safe)
         for i, r in enumerate(results):
             if r is None:
-                results[i] = DeepRecallResult(
-                    answer="",
-                    sources=[],
-                    reasoning_trace=[],
-                    usage=UsageInfo(),
-                    execution_time=0.0,
-                    query=queries[i],
-                    budget_status={},
-                    error="Query failed: no result produced",
-                    confidence=None,
-                )
+                results[i] = self._error_result(queries[i], "Query failed: no result produced")
 
         return results  # type: ignore[return-value]
 
@@ -433,38 +450,45 @@ class DeepRecallEngine:
 
     def _build_context(self, query: str, top_k: int) -> str:
         """Build context string for the RLM with query info and DB stats."""
-        doc_count = self.vectorstore.count()
-        context_parts = [
-            f"USER QUERY: {query}",
-            "",
-            f"VECTOR DATABASE: {type(self.vectorstore).__name__} with {doc_count} documents.",
-            f"You have access to search_db(query, top_k={top_k}) to search this database.",
-            "",
-            "INSTRUCTIONS:",
-            "1. Use search_db() to find relevant documents for the query.",
-            "2. Analyze retrieved documents and search again if needed.",
-            "3. Use llm_query() to reason over large amounts of retrieved text.",
-            "4. Provide a comprehensive final answer with FINAL().",
-        ]
-        return "\n".join(context_parts)
+        vs = type(self.vectorstore).__name__
+        return (
+            f"USER QUERY: {query}\n\n"
+            f"VECTOR DATABASE: {vs} with {self.vectorstore.count()} documents.\n"
+            f"You have access to search_db(query, top_k={top_k}) to search this database.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Use search_db() to find relevant documents for the query.\n"
+            "2. Analyze retrieved documents and search again if needed.\n"
+            "3. Use llm_query() to reason over large amounts of retrieved text.\n"
+            "4. Provide a comprehensive final answer with FINAL()."
+        )
 
     def _extract_usage(self, rlm_result: Any) -> UsageInfo:
-        """Extract token usage from the RLM result."""
+        """Extract token usage and cost from the RLM result."""
         usage = UsageInfo()
         try:
-            summary = rlm_result.usage_summary
-            if hasattr(summary, "model_usage_summaries"):
-                for model_name, model_usage in summary.model_usage_summaries.items():
-                    usage.total_input_tokens += model_usage.total_input_tokens or 0
-                    usage.total_output_tokens += model_usage.total_output_tokens or 0
-                    usage.total_calls += model_usage.total_calls or 0
-                    usage.model_breakdown[model_name] = {
-                        "input_tokens": model_usage.total_input_tokens or 0,
-                        "output_tokens": model_usage.total_output_tokens or 0,
-                        "calls": model_usage.total_calls or 0,
-                    }
+            summaries = getattr(rlm_result.usage_summary, "model_usage_summaries", None)
+            if not summaries:
+                return usage
+            for name, mu in summaries.items():
+                usage.total_input_tokens += mu.total_input_tokens or 0
+                usage.total_output_tokens += mu.total_output_tokens or 0
+                usage.total_calls += mu.total_calls or 0
+                bd: dict[str, int | float | None] = {
+                    "input_tokens": mu.total_input_tokens or 0,
+                    "output_tokens": mu.total_output_tokens or 0,
+                    "calls": mu.total_calls or 0,
+                }
+                if (cost := getattr(mu, "total_cost", None)) is not None:
+                    bd["cost_usd"] = cost
+                usage.model_breakdown[name] = bd
+            costs = [
+                v["cost_usd"]
+                for v in usage.model_breakdown.values()
+                if v.get("cost_usd") is not None
+            ]
+            usage.total_cost_usd = sum(costs) if costs else None  # type: ignore[arg-type]
         except Exception:
-            logger.debug("Could not extract usage info from RLM result", exc_info=True)
+            logger.debug("Could not extract usage from RLM result", exc_info=True)
         return usage
 
     def _build_cache_key(self, query: str, top_k: int) -> str:
